@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ownership sync review</title>
+<style>
+  :root { --ink:#1f2933; --muted:#6b7780; --line:#dde3e8; --bg:#f4f6f8; --card:#fff; --accent:#1f5f8b;
+          --ok:#1f7a4d; --warn:#9a6700; --bad:#b42318; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; color:var(--ink); background:var(--bg); }
+  a { color:var(--accent); }
+  header.top { background:#14344d; color:#fff; padding:10px 24px; display:flex; gap:20px; align-items:center; flex-wrap:wrap; }
+  header.top b { font-size:16px; }
+  header.top a { color:#d6e6f2; text-decoration:none; padding:4px 0; border-bottom:2px solid transparent; }
+  header.top a.on { color:#fff; border-color:#fff; }
+  header.top .spacer { flex:1; }
+  header.top .meta { color:#a9c3d6; font-size:12px; }
+  main { max-width:1100px; margin:0 auto; padding:18px 24px 80px; }
+  .flashes { position:sticky; top:0; z-index:5; }
+  .flash { padding:10px 14px; border-radius:6px; margin:0 0 8px; border:1px solid; background:#fff; box-shadow:0 2px 6px rgba(0,0,0,.12); }
+  .flash.ok { border-color:var(--ok); background:#eaf6ef; } .flash.warn { border-color:var(--warn); background:#fff6dd; }
+  .flash.error { border-color:var(--bad); background:#fdecea; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px 18px; margin:0 0 16px; scroll-margin-top:70px; }
+  .card h2 { font-size:16px; margin:6px 0 6px; }
+  .badge { display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:10px; background:#e6edf3; color:#27455c; margin-right:6px; }
+  .badge.chow { background:#fde8d7; color:#8a3c00; } .badge.wrong_parent { background:#fdecea; color:#8f1d14; }
+  .badge.duplicate { background:#ece8fb; color:#43308f; } .badge.new_account { background:#e3f4ea; color:#17603b; }
+  .badge.not_on_website { background:#fff3c9; color:#6b4a00; } .badge.high { background:#e3f4ea; color:#17603b; }
+  .badge.medium { background:#fff3c9; color:#6b4a00; } .badge.low { background:#fdecea; color:#8f1d14; }
+  .badge.applied { background:#e3f4ea; color:#17603b; } .badge.rejected, .badge.failed, .badge.applying { background:#fdecea; color:#8f1d14; }
+  .badge.pending { background:#fff3c9; color:#6b4a00; } .badge.obsolete { background:#eceff1; color:#55606a; }
+  .reason { margin:4px 0 12px; }
+  table { border-collapse:collapse; width:100%; margin:6px 0 12px; }
+  th, td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:600; }
+  td.before { color:var(--bad); } td.after { color:var(--ok); font-weight:600; }
+  .yes { color:var(--ok); font-weight:600; } .no { color:var(--bad); font-weight:600; } .muted { color:var(--muted); }
+  h3 { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:14px 0 2px; }
+  .sop { border-left:4px solid #d9822b; background:#fff8f0; padding:8px 12px; margin:8px 0 12px; }
+  .sop.preserve { border-color:var(--bad); background:#fdf1ef; }
+  ul.tight { margin:4px 0 10px; padding-left:20px; }
+  pre { background:#f1f4f6; border:1px solid var(--line); border-radius:6px; padding:8px 10px; overflow:auto; font-size:12px; margin:4px 0 8px; }
+  details summary { cursor:pointer; color:var(--accent); }
+  .actions { display:flex; gap:16px; flex-wrap:wrap; align-items:center; border-top:1px solid var(--line); padding-top:12px; margin-top:12px; }
+  .actions form { display:flex; gap:6px; align-items:center; }
+  input[type=text] { padding:6px 8px; border:1px solid #b9c4cc; border-radius:5px; min-width:220px; font:inherit; }
+  button { font:inherit; font-weight:600; padding:6px 14px; border-radius:5px; border:1px solid; cursor:pointer; }
+  button.approve { background:var(--ok); border-color:var(--ok); color:#fff; } button.reject { background:#fff; border-color:var(--bad); color:var(--bad); }
+  button.plain { background:#fff; border-color:#8aa0b0; color:#14344d; }
+  .index { columns:2; column-gap:28px; margin:0 0 18px; padding:12px 18px; background:#fff; border:1px solid var(--line); border-radius:8px; }
+  .index div { break-inside:avoid; margin-bottom:6px; } .index a { text-decoration:none; }
+  .summary { margin:0 0 14px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header class="top">
+  <b>Ownership sync</b>
+  {% set tab = tab|default('') %}
+  {% for key in ['pending', 'applied', 'rejected', 'failed', 'obsolete'] %}
+    <a class="{{ 'on' if tab == key }}" href="{{ url_for('queue', status=key) }}">{{ key|capitalize }}
+      ({{ counts.get(key, 0) + (counts.get('applying', 0) if key == 'failed' else 0) }})</a>
+  {% endfor %}
+  <a class="{{ 'on' if tab == 'matches' }}" href="{{ url_for('matches') }}">All locations</a>
+  <a class="{{ 'on' if tab == 'history' }}" href="{{ url_for('history') }}">Audit log</a>
+  <span class="spacer"></span>
+  <span class="meta">
+    {% if last_run %}last run #{{ last_run.id }} {{ last_run.status }} at {{ last_run.finished_at or last_run.started_at }}{% else %}no run yet{% endif %}
+    · reviewer {{ reviewer }}
+  </span>
+  <form method="post" action="{{ url_for('run_now') }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="plain" title="Scrape the website, read the CRM and refresh the queue. Read-only against the CRM.">Run pipeline now</button>
+  </form>
+</header>
+<main>
+  <div class="flashes">
+  {% for category, message in get_flashed_messages(with_categories=true) %}
+    <div class="flash {{ category }}">{{ message }}</div>
+  {% endfor %}
+  </div>
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

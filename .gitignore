@@ -1,0 +1,29 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# local run artifacts (the state DB is deliberately NOT ignored - see README "State")
+data/snapshots/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# local tooling
+.claude/
+
+# sqlite side files
+*.db-journal
+*.db-wal
+*.db-shm

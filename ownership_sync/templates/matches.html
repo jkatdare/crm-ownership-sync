@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% set tab = 'matches' %}
+{% set labels = {'confident_match': 'Confident match', 'match_needs_fix': 'Match - needs a fix', 'no_crm_account': 'No CRM account yet'} %}
+{% macro proposal_links(fingerprints) %}
+  {% for fp in fingerprints %}{% set p = by_fingerprint.get(fp) %}{% if p %}
+    <a href="{{ url_for('queue', status='failed' if p.status == 'applying' else p.status) }}#p{{ p.id }}" title="{{ p.title }}"><span class="badge {{ p.status }}">#{{ p.id }} {{ p.status }}</span></a>
+  {% endif %}{% endfor %}
+{% endmacro %}
+
+{% block content %}
+{% if not run %}
+  <div class="card">No successful run yet. Click <b>Run pipeline now</b>.</div>
+{% else %}
+{% set s = run.summary %}
+<div class="card">
+  <b>Run #{{ run.id }}</b> ({{ run.finished_at }}): scraped <b>{{ s.scrape.communities_found }}</b> communities over {{ s.scrape.pages_crawled }} pages -
+  {{ s.scrape.in_directory }} from the directory{% if s.scrape.outside_directory %}, plus {{ s.scrape.outside_directory|length }} linked only
+  elsewhere on the site ({{ s.scrape.outside_directory|join(", ") }}){% endif %}.
+  The site itself claims {{ s.scrape.home_page_claims }} communities on the home page and {{ s.scrape.directory_claims }} in the directory.
+  Read {{ s.crm.accounts }} CRM accounts and {{ s.crm.contacts }} contacts.
+  {% for w in s.scrape.warnings %}<div class="flash warn">{{ w }}</div>{% endfor %}
+</div>
+
+<div class="card">
+  <h2>Website locations ({{ s.matches|length }})</h2>
+  <table>
+    <tr><th>Website community</th><th>Classification</th><th>Matched on</th><th>CRM account</th><th>Extra records</th><th>Proposals</th></tr>
+    {% for m in s.matches %}
+    <tr>
+      <td><a href="{{ m.url }}" target="_blank" rel="noopener">{{ m.name }}</a><br><span class="muted">{{ m.city }}</span></td>
+      <td>{{ labels[m.classification] }}<br><span class="badge {{ m.confidence }}">{{ m.confidence }}</span></td>
+      <td>{{ m.basis or "-" }}</td>
+      <td>{% if m.account_id %}<a href="{{ crm_url(m.account_id) }}" target="_blank" rel="noopener">{{ m.account_name }}</a><br><span class="muted">{{ m.account_id }}</span>{% else %}<span class="muted">none</span>{% endif %}</td>
+      <td>{{ m.duplicates or "" }}</td>
+      <td>{{ proposal_links(m.proposals) }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>Under the Bellhaven parent in the CRM, but not on the website ({{ s.unlisted|length }})</h2>
+  <table>
+    <tr><th>CRM account</th><th>Location</th><th>CRM status</th><th>State</th><th>Proposals</th></tr>
+    {% for u in s.unlisted %}
+    <tr>
+      <td><a href="{{ crm_url(u.account_id) }}" target="_blank" rel="noopener">{{ u.name }}</a><br><span class="muted">{{ u.account_id }}</span></td>
+      <td>{{ u.city }}</td><td>{{ u.status }}</td><td>{{ u.state }}</td><td>{{ proposal_links(u.proposals) }}</td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="muted">None.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endblock %}

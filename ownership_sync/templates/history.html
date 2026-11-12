@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% set tab = 'history' %}
+{% block content %}
+<div class="card">
+  <h2>Audit log</h2>
+  <p class="muted">Every decision, who made it, and every API write it caused. Newest first.</p>
+  <table>
+    <tr><th>When (UTC)</th><th>Proposal</th><th>Decision</th><th>By</th><th>Note</th><th>API writes</th></tr>
+    {% for e in events %}
+    <tr>
+      <td>{{ e.at }}</td>
+      <td>#{{ e.proposal_id }} {{ e.title }}</td>
+      <td><span class="badge {{ e.event }}">{{ e.event }}</span></td>
+      <td>{{ e.detail.by }}</td>
+      <td>{{ e.detail.note }}{% if e.detail.result and e.detail.result.error %}<br><span class="no">{{ e.detail.result.error }}</span>{% endif %}
+          {% if e.detail.result and e.detail.result.noop %}<br><span class="muted">{{ e.detail.result.noop }}</span>{% endif %}</td>
+      <td>{% for w in (e.detail.result.writes if e.detail.result else []) %}<code>{{ w.method }} {{ w.path }} &rarr; {{ w.status }}</code><br>{% endfor %}</td>
+    </tr>
+    {% else %}<tr><td colspan="6" class="muted">No decisions yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

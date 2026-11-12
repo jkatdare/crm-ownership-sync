@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% macro money(v) %}${{ "{:,.0f}".format(v or 0) }}{% endmacro %}
+{% macro mark(ok) %}{% if ok %}<span class="yes">match</span>{% else %}<span class="no">differs</span>{% endif %}{% endmacro %}
+{% macro account_line(a) %}
+  <a href="{{ crm_url(a.account_id) }}" target="_blank" rel="noopener">{{ a.name }}</a> <span class="muted">{{ a.account_id }}</span>
+  · parent: {{ a.parent_name or "none" }} · {{ a.billing_street }}, {{ a.billing_city }}, {{ a.billing_state }} {{ a.billing_zip }}
+  · {{ a.status }} · revenue {{ money(a.lifetime_revenue) }} · AR {{ money(a.outstanding_ar) }}
+{% endmacro %}
+
+{% block content %}
+{% if done and done.status == 'applied' %}
+{% set r = done.result or {} %}
+<div class="flashes"><div class="flash ok">
+  <b>Approved #{{ done.id }} and written to the CRM:</b> {{ done.title }}
+  ({% if r.noop %}{{ r.noop }} - nothing to write{% else %}{{ r.writes|length }} API write(s), read back and verified{% endif %}).
+  {% for key in ['updated', 'preserved', 'created', 'reused', 'account_id'] %}{% if r[key] %}
+    <a href="{{ crm_url(r[key]) }}" target="_blank" rel="noopener">Open {{ r[key] }} in the CRM{% if key == 'created' %} (new account){% endif %}</a>
+  {% endif %}{% endfor %}
+</div></div>
+{% endif %}
+{% if tab == 'pending' %}
+  <p class="summary">{{ proposals|length }} proposal(s) awaiting a decision. Nothing is written to the CRM until you approve it here.
+    A rejected proposal is remembered and never proposed again.</p>
+{% else %}
+  <p class="summary">{{ proposals|length }} {{ tab }} proposal(s).</p>
+{% endif %}
+
+{% if proposals|length > 3 %}
+<div class="index">
+  {% for p in proposals %}
+    <div><span class="badge {{ p.category }}">{{ categories[p.category][0] }}</span><a href="#p{{ p.id }}">{{ p.title }}</a></div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% for p in proposals %}
+{% set ev = p.evidence %}
+{% set next_anchor = ('p%d' % loop.nextitem.id) if loop.nextitem else '' %}
+<article class="card" id="p{{ p.id }}">
+  <span class="badge {{ p.category }}">{{ categories[p.category][0] }}</span>
+  <span class="badge {{ p.confidence }}">{{ p.confidence }} confidence</span>
+  {% if tab != 'pending' %}<span class="badge {{ p.status }}">{{ p.status }}</span>{% endif %}
+  <span class="muted">#{{ p.id }}</span>
+  <h2>{{ p.title }}</h2>
+  <p class="reason">{{ ev.reason }}</p>
+
+  {% if ev.sop %}
+  <div class="sop {{ 'preserve' if ev.sop.must_preserve }}">
+    {% if p.category in ('chow', 'wrong_parent') %}
+    <b>CHOW SOP check:</b> lifetime revenue {{ money(ev.sop.lifetime_revenue) }}, outstanding AR {{ money(ev.sop.outstanding_ar) }}
+    &rarr; {{ ev.sop.branch }}.
+    {% else %}
+    <b>Billing on this record:</b> lifetime revenue {{ money(ev.sop.lifetime_revenue) }}, outstanding AR {{ money(ev.sop.outstanding_ar) }}{% if ev.sop.must_preserve %}
+    &rarr; revenue history and open AR, so billing needs it preserved{% endif %}.
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if ev.diff %}
+  <h3>Proposed change{% if ev.account %} to <a href="{{ crm_url(ev.account.account_id) }}" target="_blank" rel="noopener">{{ ev.account.name }}</a>
+    <span class="muted">({{ ev.account.account_id }})</span>{% endif %}</h3>
+  <table>
+    <tr><th style="width:22%">Field</th><th style="width:39%">Now in the CRM</th><th>After approval</th></tr>
+    {% for d in ev.diff %}<tr><td>{{ d.field }}</td><td class="before">{{ d.before }}</td><td class="after">{{ d.after }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+
+  {% if ev.new_account %}
+  <h3>New account to create</h3>
+  <table>
+    {% for key, value in ev.new_account.items() %}
+      <tr><td style="width:22%">{{ key }}</td><td class="after">{{ value }}{% if key == 'parent_id' %} <span class="muted">(Bellhaven parent)</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if ev.location and ev.account and ev.signals %}
+  {% set loc, a, s = ev.location, ev.account, ev.signals %}
+  <h3>Evidence: website listing vs CRM record</h3>
+  <table>
+    <tr><th style="width:16%"></th><th style="width:36%"><a href="{{ loc.url }}" target="_blank" rel="noopener">Website</a></th>
+        <th style="width:36%"><a href="{{ crm_url(a.account_id) }}" target="_blank" rel="noopener">CRM {{ a.account_id }}</a></th><th></th></tr>
+    <tr><td>Name</td><td>{{ loc.name }}</td><td>{{ a.name }}</td><td>{{ "%d%%"|format(s.name_similarity * 100) }} similar</td></tr>
+    <tr><td>Street</td><td>{{ loc.street }}</td><td>{{ a.billing_street }}</td>
+        <td>{% if s.po_box %}<span class="muted">PO box</span>{% else %}{{ mark(s.street) }}{% endif %}</td></tr>
+    <tr><td>City, state, zip</td><td>{{ loc.city }}, {{ loc.state }} {{ loc.zip }}</td>
+        <td>{{ a.billing_city }}, {{ a.billing_state }} {{ a.billing_zip }}</td><td>{{ mark(s.city and s.state and s.zip) }}</td></tr>
+    <tr><td>Care</td><td>{{ loc.care_offerings|join(", ") }}</td><td>{{ a.care_type }}</td><td></td></tr>
+    <tr><td>Phone</td><td>{{ loc.phone }}</td><td>{{ a.phone }}</td><td>{{ mark(s.phone) }}</td></tr>
+    <tr><td>Administrator</td><td>{{ loc.administrator }}</td><td>{{ ev.contacts|join("; ") or "no contacts" }}</td><td>{{ mark(s.administrator) }}</td></tr>
+    <tr><td>Parent</td><td class="muted">listed on Bellhaven's site</td><td>{{ a.parent_name or "none" }}</td><td></td></tr>
+    <tr><td>Status / billing</td><td></td><td>{{ a.status }} · revenue {{ money(a.lifetime_revenue) }} · AR {{ money(a.outstanding_ar) }}</td><td></td></tr>
+  </table>
+  {% elif ev.location %}
+  <h3>Website listing</h3>
+  <p><a href="{{ ev.location.url }}" target="_blank" rel="noopener">{{ ev.location.name }}</a> · {{ ev.location.street }}, {{ ev.location.city }},
+     {{ ev.location.state }} {{ ev.location.zip }} · {{ ev.location.care_offerings|join(", ") }} · administrator {{ ev.location.administrator }} · {{ ev.location.phone }}</p>
+  {% elif ev.account %}
+  <h3>CRM record</h3>
+  <p>{{ account_line(ev.account) }}{% if ev.contacts %} · contacts: {{ ev.contacts|join("; ") }}{% endif %}</p>
+  {% endif %}
+
+  {% if ev.bullets %}
+  <h3>Why</h3>
+  <ul class="tight">{% for b in ev.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if ev.others %}
+  <h3>Related CRM records</h3>
+  <ul class="tight">
+    {% for o in ev.others %}<li><b>{{ o.role }}:</b> {{ account_line(o.account) }}{% if o.why %}<br><span class="muted">{{ o.why }}</span>{% endif %}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  <details {{ 'open' if tab != 'pending' }}>
+    <summary>Exact API call(s) on approval</summary>
+    {% for call in preview_calls(p) %}
+      <pre>{{ call.method }} /api/v1{{ call.path }}
+{{ call.body|tojson(indent=2) }}</pre>
+    {% endfor %}
+    <span class="muted">Notes are prefixed with a date stamp when written. Proposal fingerprint {{ p.fingerprint }}.</span>
+  </details>
+
+  {% if p.status in ('pending', 'failed', 'applying') %}
+  <div class="actions">
+    <form method="post" action="{{ url_for('approve', pid=p.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="tab" value="{{ tab }}"><input type="hidden" name="anchor" value="{{ next_anchor }}">
+      <input type="text" name="note" placeholder="Approval note (optional)">
+      <button class="approve">{{ 'Retry' if p.status != 'pending' else 'Approve' }} &amp; write to CRM</button>
+    </form>
+    {% if p.status == 'pending' %}
+    <form method="post" action="{{ url_for('reject', pid=p.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="tab" value="{{ tab }}"><input type="hidden" name="anchor" value="{{ next_anchor }}">
+      <input type="text" name="note" placeholder="Reason for rejecting (optional)">
+      <button class="reject">Reject</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if p.status != 'pending' %}
+  <h3>Decision</h3>
+  <p>{{ p.status }}{% if p.decided_by %} by {{ p.decided_by }} at {{ p.decided_at }}{% endif %}{% if p.decision_note %} - “{{ p.decision_note }}”{% endif %}</p>
+  {% if p.result %}<pre>{{ p.result|tojson(indent=2) }}</pre>{% endif %}
+  {% if p.status == 'rejected' %}
+  <form method="post" action="{{ url_for('reopen', pid=p.id) }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="tab" value="{{ tab }}">
+    <button class="plain">Reopen</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</article>
+{% else %}
+  <div class="card">Nothing here.{% if tab == 'pending' and not last_run %} Click <b>Run pipeline now</b> to scrape the website and build the queue.{% endif %}</div>
+{% endfor %}
+{% endblock %}

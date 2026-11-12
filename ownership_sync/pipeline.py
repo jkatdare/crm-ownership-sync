@@ -1,0 +1,38 @@
+"""One scheduled run: scrape -> read the CRM -> match -> record proposals. Never writes to the CRM."""
+from collections import Counter
+
+from . import config
+from .crm import CrmClient
+from .matcher import build_plan
+from .scraper import ScrapeError, scrape
+
+
+def run_pipeline(store, crm=None, scrape_fn=scrape):
+    run_id = store.start_run()
+    try:
+        locations, scrape_stats = scrape_fn(config.BASE_URL)
+        # Never act on a partial scrape: a half-loaded site would look like dozens of closed facilities.
+        previous = store.last_run("ok")
+        baseline = previous["summary"]["scrape"]["communities_found"] if previous else 0
+        if not locations or len(locations) < config.MIN_SCRAPE_RATIO * baseline:
+            raise ScrapeError(f"scraped {len(locations)} communities but the last good run had {baseline}; "
+                              "refusing to propose anything from what looks like a partial scrape")
+
+        crm = crm or CrmClient(config.API_URL, config.API_TOKEN, read_only=True)  # read-only by construction
+        accounts, contacts = crm.list_accounts(), crm.list_contacts()
+        pins = config.load_overrides().get("survivor_pins")
+        plan = build_plan(locations, accounts, contacts, config.TARGET_PARENT_NAME, pins)
+
+        summary = {
+            "scrape": scrape_stats,
+            "crm": {"accounts": len(accounts), "contacts": len(contacts), "target_parent": plan["target"]},
+            "classification": dict(Counter(m["classification"] for m in plan["matches"])),
+            "proposals": store.sync_proposals(run_id, plan["proposals"]),
+            "matches": plan["matches"],
+            "unlisted": plan["unlisted"],
+        }
+        store.finish_run(run_id, "ok", summary)
+        return summary
+    except Exception as exc:
+        store.finish_run(run_id, "error", error=f"{type(exc).__name__}: {exc}")
+        raise
