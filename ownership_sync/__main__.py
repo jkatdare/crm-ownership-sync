@@ -4,7 +4,7 @@
     python -m ownership_sync rehearse # dry-run every pending approval on a copy of the live CRM; writes nothing
     python -m ownership_sync serve    # the local review app (approve / reject)
     python -m ownership_sync serve --demo   # the same app replayed on a copy of the original data; never touches the CRM
-    python -m ownership_sync scrape   # just print the scraped locations as JSON
+    python -m ownership_sync scrape   # just the scraper: every location as JSON (--table for a readable listing)
     python -m ownership_sync report   # every proposal and its decision, as a Markdown table
 """
 import argparse
@@ -29,14 +29,29 @@ def main(argv=None):
     serve.add_argument("--port", type=int)
     serve.add_argument("--demo", action="store_true",
                        help="replay on an in-memory copy of the original sandbox data; the CRM is never read or written")
-    commands.add_parser("scrape", help="print the scraped locations as JSON")
+    scrape_cmd = commands.add_parser("scrape", help="print the scraped locations as JSON")
+    scrape_cmd.add_argument("--table", action="store_true", help="print a readable table instead of JSON")
     commands.add_parser("report", help="print every proposal and its decision as Markdown")
     commands.add_parser("rehearse", help="dry-run every pending approval against a copy of the live CRM; writes nothing")
     args = parser.parse_args(argv)
 
     if args.command == "scrape":
         locations, stats = scrape(config.BASE_URL)
-        print(json.dumps({"stats": stats, "locations": [asdict(loc) for loc in locations]}, indent=2))
+        if not args.table:
+            print(json.dumps({"stats": stats, "locations": [asdict(loc) for loc in locations]}, indent=2))
+            return 0
+        elsewhere = stats["outside_directory"]
+        print(f"Scraped {stats['communities_found']} communities from {config.BASE_URL} ({stats['pages_crawled']} pages crawled):")
+        print(f"  {stats['in_directory']} from the directory"
+              + (f" + {len(elsewhere)} linked only elsewhere on the site ({', '.join(elsewhere)})" if elsewhere else ""))
+        print(f"  the site itself says: {stats.get('home_page_claims', '?')} on the home page, "
+              f"{stats.get('directory_claims', '?')} in the directory")
+        print("  warnings: " + ("; ".join(stats["warnings"]) or "none"))
+        print()
+        row = "{:<50} {:<26} {:<15} {:<3} {:<6} {}"
+        print(row.format("NAME", "STREET", "CITY", "ST", "ZIP", "CARE OFFERINGS"))
+        for loc in locations:
+            print(row.format(loc.name, loc.street, loc.city, loc.state, loc.zip, ", ".join(loc.care_offerings)))
     elif args.command == "report":
         store = Store(config.DB_PATH)
         print("| # | Category | Proposal | Status | Decided by | Decided at (UTC) | Note |")

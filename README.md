@@ -47,7 +47,7 @@ Then open http://127.0.0.1:5000 and review the queue.
 | `python -m ownership_sync rehearse` | Dry-runs every pending approval on a private copy of the live CRM. Writes nothing. |
 | `python -m ownership_sync serve` | The review app. Approve / reject; approvals write to the CRM. |
 | `python -m ownership_sync serve --demo` | The same app replayed on an in-memory copy of the original data (port 5001). Never touches the CRM. |
-| `python -m ownership_sync scrape` | Just the scraper: prints every location as JSON, with self-check stats. |
+| `python -m ownership_sync scrape` | Just the scraper: prints every location as JSON, with self-check stats (`--table` for a readable listing). |
 | `python -m ownership_sync report` | Every proposal and its decision as a Markdown table. |
 | `python -m pytest` | The test suite; it uses an in-memory fake CRM and never touches the sandbox. |
 
