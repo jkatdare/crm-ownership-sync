@@ -12,7 +12,7 @@ from flask import Flask, abort, flash, g, redirect, render_template, request, ur
 
 from . import config
 from .apply import StaleProposal, apply_proposal, preview_calls
-from .crm import CrmClient
+from .crm import CrmClient, InMemoryCrm
 from .pipeline import run_pipeline
 from .store import Store
 
@@ -37,11 +37,14 @@ def crm_url(account_id):
     return f"{config.BASE_URL}/crm/{config.API_TOKEN}/accounts/{account_id}"
 
 
-def create_app(db_path=None, crm_factory=None):
+def create_app(db_path=None, crm_factory=None, demo_crm=None):
+    """The review app. With demo_crm (an InMemoryCrm) every read and write goes to that copy instead of the CRM."""
     app = Flask(__name__)
     app.secret_key = secrets.token_hex(16)
     form_token = secrets.token_hex(16)  # every POST must carry it, so only this UI can approve anything
     reviewer = os.environ.get("REVIEWER") or getpass.getuser()
+    if demo_crm is not None:
+        crm_factory = lambda: demo_crm
     crm_factory = crm_factory or (lambda: CrmClient(config.API_URL, config.API_TOKEN))
 
     # Nothing can be mid-approval while the app is starting, so anything still marked as such was
@@ -73,7 +76,9 @@ def create_app(db_path=None, crm_factory=None):
 
     @app.context_processor
     def template_helpers():
-        return {"csrf": form_token, "categories": CATEGORIES, "crm_url": crm_url, "preview_calls": preview_calls,
+        demo = demo_crm is not None  # in a demo, account links open the in-memory copy, not the real CRM
+        return {"csrf": form_token, "categories": CATEGORIES, "preview_calls": preview_calls, "demo": demo,
+                "crm_url": (lambda account_id: url_for("demo_account", account_id=account_id)) if demo else crm_url,
                 "counts": store().counts(), "last_run": store().last_run(), "reviewer": reviewer,
                 "as_json": lambda value: json.dumps(value, indent=2, ensure_ascii=False)}
 
@@ -114,16 +119,17 @@ def create_app(db_path=None, crm_factory=None):
             flash(f"Proposal #{pid} is already {s.get(pid)['status']}; nothing was written by this click.", "warn")
             return back()
         note = request.form.get("note", "").strip()
+        first = len(crm.writes)  # the audit trail of THIS approval starts here
         try:
             result = apply_proposal(crm, proposal)
         except StaleProposal as exc:
-            s.decide(pid, "obsolete", reviewer, note, {"error": str(exc), "writes": crm.writes})
+            s.decide(pid, "obsolete", reviewer, note, {"error": str(exc), "writes": crm.writes[first:]})
             flash(f"Nothing written for #{pid}: {exc}. Run the pipeline again for a fresh proposal.", "warn")
         except Exception as exc:  # CRM error, SOP guard, failed read-back: keep it visible for a retry
-            s.decide(pid, "failed", reviewer, note, {"error": f"{type(exc).__name__}: {exc}", "writes": crm.writes})
+            s.decide(pid, "failed", reviewer, note, {"error": f"{type(exc).__name__}: {exc}", "writes": crm.writes[first:]})
             flash(f"Approval of #{pid} failed: {exc}", "error")
         else:
-            s.decide(pid, "applied", reviewer, note, {**result, "writes": crm.writes})
+            s.decide(pid, "applied", reviewer, note, {**result, "writes": crm.writes[first:]})
             return back(done=pid)
         return back()
 
@@ -144,7 +150,7 @@ def create_app(db_path=None, crm_factory=None):
     @app.post("/run")
     def run_now():
         try:
-            summary = run_pipeline(store())
+            summary = run_pipeline(store(), crm=demo_crm)  # None = the real CRM, through a read-only client
         except Exception as exc:
             flash(f"Pipeline run failed, nothing proposed: {exc}", "error")
         else:
@@ -165,4 +171,30 @@ def create_app(db_path=None, crm_factory=None):
     def history():
         return render_template("history.html", events=store().audit_log())
 
+    @app.get("/demo/accounts/<account_id>")
+    def demo_account(account_id):
+        """Stand-in for the CRM browser during a demo: one record of the in-memory copy."""
+        if demo_crm is None or account_id not in demo_crm.accounts:
+            abort(404)
+        return render_template("demo_account.html", account=demo_crm.get_account(account_id), tab="demo",
+                               contacts=demo_crm.list_contacts(account_id=account_id))
+
     return app
+
+
+def create_demo_app():
+    """The review app replayed on an in-memory copy of the ORIGINAL sandbox data, with a throwaway ledger.
+
+    The real CRM is clean once the queue has been approved, so there is nothing left to show on it.
+    This starts again from the data as first read (kept in tests/fixtures) - for a walkthrough, or
+    to try a code change against messy data - without touching the CRM or the real ledger.
+    """
+    fixtures = config.ROOT / "tests" / "fixtures"
+    read = lambda name: json.loads((fixtures / name).read_text(encoding="utf-8"))
+    demo_crm = InMemoryCrm(read("seed_accounts.json"), read("seed_contacts.json"))
+    db_path = config.ROOT / "data" / "demo.db"
+    db_path.unlink(missing_ok=True)
+    store = Store(db_path)
+    run_pipeline(store, crm=demo_crm)
+    store.close()
+    return create_app(db_path=db_path, demo_crm=demo_crm)

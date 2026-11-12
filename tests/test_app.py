@@ -189,3 +189,24 @@ def test_approving_from_a_page_that_a_later_run_has_refreshed_writes_nothing(cli
     fresh = Store(client.db).get(pid)["last_run_id"]
     client.post(f"/proposals/{pid}/approve", data={"csrf": client.csrf, "seen": fresh})
     assert status_of(client, pid) == "applied" and len(fake_crm.writes) == 1
+
+
+def test_demo_mode_reads_and_writes_only_the_in_memory_copy(tmp_path, locations, fake_crm):
+    db = tmp_path / "demo.db"
+    store = Store(db)
+    store.sync_proposals(store.start_run(), build_plan(locations, fake_crm.list_accounts(), fake_crm.list_contacts(), PARENT_NAME)["proposals"])
+    store.close()
+    demo = create_app(db_path=db, demo_crm=fake_crm).test_client()
+    page = demo.get("/").get_data(as_text=True)
+    assert "DEMO MODE" in page and "/demo/accounts/" in page and "/crm/" not in page  # no link to the real CRM
+    token = re.search(r'name="csrf" value="([0-9a-f]+)"', page).group(1)
+    pid = next(p["id"] for p in Store(db).list(("pending",)) if p["account_id"] == LIMA)
+    demo.post(f"/proposals/{pid}/approve", data={"csrf": token})
+    assert fake_crm.get_account(LIMA)["parent_id"] == BELLHAVEN  # landed in the copy
+    record = demo.get(f"/demo/accounts/{LIMA}").get_data(as_text=True)
+    assert "Bellhaven Senior Living (Parent Account)" in record and "parent was Harborview Care Group" in record
+
+
+def test_the_demo_account_page_does_not_exist_outside_demo_mode(client):
+    assert client.get(f"/demo/accounts/{LIMA}").status_code == 404
+    assert "DEMO MODE" not in client.get("/").get_data(as_text=True)

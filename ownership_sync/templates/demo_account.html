@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <span class="badge">Demo copy of a CRM account</span>
+  <h2>{{ account.name }} <span class="muted">{{ account.account_id }}</span></h2>
+  <table>
+    <tr><td style="width:26%">Parent account</td><td>{{ account.parent_name or "none" }}{% if account.parent_id %} <span class="muted">({{ account.parent_id }})</span>{% endif %}</td></tr>
+    <tr><td>Status</td><td><span class="badge {{ 'applied' if account.status == 'Active' else 'pending' }}">{{ account.status }}</span></td></tr>
+    <tr><td>Care type</td><td>{{ account.care_type }}</td></tr>
+    <tr><td>Phone</td><td>{{ account.phone }}</td></tr>
+    <tr><td>Billing address</td><td>{{ account.billing_street }}, {{ account.billing_city }}, {{ account.billing_state }} {{ account.billing_zip }}</td></tr>
+    <tr><td>Lifetime revenue / outstanding AR</td><td>${{ "{:,.0f}".format(account.lifetime_revenue or 0) }} / ${{ "{:,.0f}".format(account.outstanding_ar or 0) }}</td></tr>
+    <tr><td>CHOW current account</td><td>{{ account.chow_current_account or "-" }}</td></tr>
+    <tr><td>Duplicate of</td><td>{{ account.duplicate_of_account or "-" }}</td></tr>
+    <tr><td>Note</td><td>{{ account.note or "-" }}</td></tr>
+    <tr><td>Created by this tool</td><td>{{ "yes" if account.created_by_candidate else "no" }}</td></tr>
+  </table>
+  <h3>Contacts ({{ contacts|length }})</h3>
+  <ul class="tight">
+    {% for c in contacts %}<li>{{ c.name }} - {{ c.title }}{% if c.email %} - {{ c.email }}{% endif %}</li>{% else %}<li class="muted">none</li>{% endfor %}
+  </ul>
+  <p><a href="{{ url_for('queue') }}">Back to the queue</a></p>
+</div>
+{% endblock %}

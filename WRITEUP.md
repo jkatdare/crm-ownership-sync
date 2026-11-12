@@ -1,7 +1,7 @@
 # Writeup
 
 > Draft prepared with Claude Code from what was actually built and run. Items marked **TODO** are mine
-> to fill in after the review session (decisions taken, time spent, video link).
+> to fill in (time spent, video link, and my own account of how I directed the AI).
 
 ## Matching approach
 
@@ -43,6 +43,21 @@ the Bellhaven parent that are no longer on the website. That is 29 proposals:
 | No longer on the website, new owner unknown | 2 | Alliance, Coldwater |
 | Data fix | 1 | Portsmouth zip |
 | Address note (optional) | 1 | Ashtabula |
+
+## End state
+
+I reviewed all 29 proposals in the app and approved every one; none was rejected. The full list with
+timestamps is in [DECISIONS.md](DECISIONS.md) and in the app's audit log. Afterwards the CRM was
+re-read and compared, field by field, with the approved plan applied to the original data:
+
+- 127 accounts: the original 121 plus 6 created (Batavia, Carlisle, Union Square, Amberly Manor, and
+  the two CHOW successors, Tiffin and Marietta).
+- 25 existing accounts changed, exactly the 25 the plan names; the other 96 are untouched,
+  including the three look-alike accounts under other operators.
+- Each of the 35 website communities maps to exactly one live, Active account under the Bellhaven
+  parent, and a fresh run of the pipeline proposes nothing (35 confident matches).
+- Tiffin, Marietta and Sandusky (revenue and outstanding AR) changed in `chow_current_account` and
+  nothing else.
 
 ## Choices for outcomes that are not simple field updates
 
@@ -87,7 +102,9 @@ duplicates, flags all three proposals as ambiguous, says so in the note, and let
 a different survivor in `overrides.json` before approving. The three independent reviewers and the
 judge all landed on the same tie-break; the judge's fallback, if I had wanted no guess at all, was
 Needs Review on all three, at the cost of leaving a listed community without a Bellhaven account.
-**TODO: state which one I kept and why.**
+I kept the tie-break (the unparented record, `0016KTS1UAWBRXS09J`): with nothing to tell the three
+apart, the record that sits under no other operator is the least disruptive one to re-parent, and
+none of the three has billing history or contacts to lose.
 
 **Notes as the ownership trail.** The CRM keeps no field history, so a re-parent or rename would
 erase exactly the history this exercise is about. Every change to an existing record therefore also
@@ -97,15 +114,17 @@ CHOW-preserved account, which gets only the link.
 
 **PO box (Ashtabula).** Matched with high confidence on name, city, zip, phone and administrator.
 I did not overwrite the PO box with the website's street: the field is a *billing* street, and a PO
-box is a legitimate billing address. An optional proposal adds the physical address to the note.
+box is a legitimate billing address. An optional proposal adds the physical address to the note,
+which I approved.
 
 **Zip typo (Portsmouth).** Same street, city, state, name, phone and administrator, zip 45626 vs
 45662 - a transposition. Corrected, because here the billing address *is* the physical address.
 
 **Names.** Three accounts carry a pre-rebrand name and are renamed. Four differ only in spelling
 ("Rehab and Nursing" vs "Rehabilitation & Nursing", "of" vs "at", a missing "The"). I surface those
-as a separate low-stakes category rather than silently ignoring or silently changing them.
-**TODO: say which I approved / rejected.**
+as a separate low-stakes category rather than silently ignoring or silently changing them. I
+approved all four: the website is the only naming authority available, and the previous name is
+kept in the note.
 
 **Left alone on purpose.** Phone numbers and existing contacts are used as matching evidence only;
 the brief scopes the scrape to name, address and care offerings, and a website front-desk number is
@@ -142,7 +161,12 @@ this section so it reflects my own direction and checks.**
 - **Tests as the check on the AI.** The suite runs against an in-memory fake CRM seeded from the
   real sandbox data, including one test that approves the whole queue and asserts the next run
   proposes nothing and every location is a confident match.
-- **Me.** Every write to the CRM was a proposal I read and approved in the review app.
+- **A rehearsal before any real write.** Because the sandbox cannot be reset, every pending
+  approval was first run through the real executor against an in-memory copy of the live CRM
+  (`rehearse`): 29 of 29 applied cleanly and the follow-up run proposed nothing.
+- **Me.** Every write to the CRM was a proposal approved in the review app. The first one (the
+  Portsmouth zip fix) I had Claude submit as a deliberate test of the real write path, then checked
+  it in the CRM browser; the other 28 I approved myself.
 
 ## What I would build next
 

@@ -27,3 +27,6 @@ Thumbs.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# throwaway ledger of the demo mode
+data/demo.db

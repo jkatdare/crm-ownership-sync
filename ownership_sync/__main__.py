@@ -3,6 +3,7 @@
     python -m ownership_sync run      # the daily job: scrape + match + record proposals (CRM read-only)
     python -m ownership_sync rehearse # dry-run every pending approval on a copy of the live CRM; writes nothing
     python -m ownership_sync serve    # the local review app (approve / reject)
+    python -m ownership_sync serve --demo   # the same app replayed on a copy of the original data; never touches the CRM
     python -m ownership_sync scrape   # just print the scraped locations as JSON
     python -m ownership_sync report   # every proposal and its decision, as a Markdown table
 """
@@ -25,7 +26,9 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("run", help="scrape, match and record proposals; never writes to the CRM")
     serve = commands.add_parser("serve", help="start the review app")
-    serve.add_argument("--port", type=int, default=5000)
+    serve.add_argument("--port", type=int)
+    serve.add_argument("--demo", action="store_true",
+                       help="replay on an in-memory copy of the original sandbox data; the CRM is never read or written")
     commands.add_parser("scrape", help="print the scraped locations as JSON")
     commands.add_parser("report", help="print every proposal and its decision as Markdown")
     commands.add_parser("rehearse", help="dry-run every pending approval against a copy of the live CRM; writes nothing")
@@ -66,9 +69,14 @@ def main(argv=None):
             print(f"  still proposed: {title}")
         return 1 if failed else 0
     elif args.command == "serve":
-        from .app import create_app
-        print(f"Review app: http://127.0.0.1:{args.port}  (state: {config.DB_PATH})")
-        create_app().run(host="127.0.0.1", port=args.port, debug=False)
+        from .app import create_app, create_demo_app
+        port = args.port or (5001 if args.demo else 5000)  # different default, so both can run side by side
+        if args.demo:
+            print(f"DEMO review app: http://127.0.0.1:{port}  (in-memory copy of the original data; the CRM is not touched)")
+            create_demo_app().run(host="127.0.0.1", port=port, debug=False)
+        else:
+            print(f"Review app: http://127.0.0.1:{port}  (state: {config.DB_PATH})")
+            create_app().run(host="127.0.0.1", port=port, debug=False)
     else:
         store = Store(config.DB_PATH)
         try:

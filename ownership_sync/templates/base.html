@@ -51,6 +51,7 @@
   .index { columns:2; column-gap:28px; margin:0 0 18px; padding:12px 18px; background:#fff; border:1px solid var(--line); border-radius:8px; }
   .index div { break-inside:avoid; margin-bottom:6px; } .index a { text-decoration:none; }
   .summary { margin:0 0 14px; color:var(--muted); }
+  .demo { background:#7a3e00; color:#fff; text-align:center; padding:7px 24px; font-weight:600; }
 </style>
 </head>
 <body>
@@ -73,6 +74,10 @@
     <button class="plain" title="Scrape the website, read the CRM and refresh the queue. Read-only against the CRM.">Run pipeline now</button>
   </form>
 </header>
+{% if demo %}
+<div class="demo">DEMO MODE - a replay on an in-memory copy of the original sandbox data. Nothing on this page reads or
+  writes the real CRM, and account links open the copy.</div>
+{% endif %}
 <main>
   <div class="flashes">
   {% for category, message in get_flashed_messages(with_categories=true) %}
