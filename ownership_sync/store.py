@@ -142,14 +142,20 @@ class Store:
     def counts(self):
         return dict(self.db.execute("SELECT status, COUNT(*) FROM proposals GROUP BY status").fetchall())
 
-    def claim(self, proposal_id, retry=False):
-        """Atomically take a proposal for applying, so a double click cannot write twice."""
-        allowed = ("pending", "failed", "applying") if retry else ("pending",)
-        marks = ",".join("?" * len(allowed))
+    def claim(self, proposal_id):
+        """Atomically take a proposal for applying. Only one request can win, so a double click
+        (or a Retry racing the first attempt) can never execute the same proposal twice."""
         with self.db:
-            cur = self.db.execute(f"UPDATE proposals SET status = 'applying' WHERE id = ? AND status IN ({marks})",
-                                  (proposal_id, *allowed))
+            cur = self.db.execute(
+                "UPDATE proposals SET status = 'applying' WHERE id = ? AND status IN ('pending', 'failed')", (proposal_id,))
         return cur.rowcount == 1
+
+    def recover_interrupted(self):
+        """Run once when the review app starts. Nothing can be mid-flight at that moment, so a row
+        still marked 'applying' is left over from a crash; make it retryable (retrying is idempotent)."""
+        with self.db:
+            self.db.execute("UPDATE proposals SET status = 'failed', result_json = ? WHERE status = 'applying'",
+                            (json.dumps({"error": "interrupted before the outcome was recorded - Retry is safe"}),))
 
     def decide(self, proposal_id, status, by, note="", result=None, only_if=None):
         """Record a decision. With only_if, it applies only while the proposal is still in that status."""

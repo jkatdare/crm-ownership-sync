@@ -19,6 +19,8 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from .normalize import norm_street
+
 DETAIL_PATH = re.compile(r"^/communities/[^/]+$")  # one path segment below the directory = a community page
 SKIP_LINK = re.compile(r"^/(api|crm)(/|$)|\.(pdf|jpe?g|png|gif|svg|css|js|ico|xml|zip)$", re.I)  # not public web pages
 CITY_LINE = re.compile(r"^(?P<city>.+?),\s*(?P<state>[A-Z]{2})\s+(?P<zip>\d{5})(?:-\d{4})?$")
@@ -27,6 +29,10 @@ MAX_PAGES = 60  # crawl guard: the site has ~6 non-detail pages
 
 class ScrapeError(RuntimeError):
     """The website could not be read reliably. The run aborts rather than act on partial data."""
+
+
+class PageGone(ScrapeError):
+    """The page does not exist (404 / 410). On a secondary page that is a dead link, not an outage."""
 
 
 @dataclass
@@ -44,12 +50,14 @@ class Location:
 
 
 def fetch(session, url, retries=3):
-    """GET with a short retry on network errors / 5xx. A 4xx is a real answer and fails at once."""
+    """GET with a short retry on network errors, 5xx and 429. Any other 4xx is a real answer and fails at once."""
     last = None
     for attempt in range(retries):
         try:
             resp = session.get(url, timeout=20)
-            if resp.status_code < 500:
+            if resp.status_code in (404, 410):
+                raise PageGone(f"{url}: HTTP {resp.status_code}")
+            if resp.status_code < 500 and resp.status_code != 429:
                 resp.raise_for_status()
                 return resp.text
             last = f"HTTP {resp.status_code}"
@@ -110,12 +118,13 @@ def scrape(base_url, session=None, fetch_fn=fetch):
         visited.add(page)
         try:
             html = fetch_fn(session, root + page)
-        except ScrapeError as exc:
-            # A dead link in the nav or footer must not block the sync. The home page and the
+        except PageGone as exc:
+            # A dead link (404) in the nav or footer must not block the sync. The home page and the
             # directory are different: without them the list of communities cannot be trusted.
+            # An outage (timeout, 5xx) on ANY page still aborts - that page might have linked a community.
             if page == "/" or page.startswith("/communities"):
                 raise
-            warnings.append(f"skipped a page that would not load: {exc}")
+            warnings.append(f"skipped a dead link: {exc}")
             continue
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(" ")
@@ -152,6 +161,13 @@ def scrape(base_url, session=None, fetch_fn=fetch):
         stats["warnings"].append(f"directory says {claims['directory_claims']} communities, scraped {len(in_directory)} from it")
     if claims.get("home_page_claims") not in (None, len(locations)):
         stats["warnings"].append(f"home page says {claims['home_page_claims']} communities, scraped {len(locations)} in total")
-    if len({loc.slug for loc in locations}) != len(locations):
-        raise ScrapeError("duplicate community slugs scraped")
+    # Matching treats one address as one facility, so the same address under two URLs (say an old
+    # and a new page during a rebrand) must stop the run rather than become a "create account" proposal.
+    by_address = {}
+    for loc in locations:
+        key = (norm_street(loc.street), loc.zip)
+        if key in by_address:
+            raise ScrapeError(f"two community pages share one address ({loc.street}, {loc.zip}): "
+                              f"{by_address[key]} and {loc.slug}")
+        by_address[key] = loc.slug
     return locations, stats

@@ -1,6 +1,6 @@
 name: Daily ownership sync
 
-# Scrapes the Bellhaven website, compares it with the CRM and refreshes the review queue.
+# Scrapes the Bellhaven website, compares it with the CRM and reports what needs review.
 # This job only ever READS the CRM. Writes happen in the review app, one approved proposal at a time.
 
 on:
@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write              # to commit the updated proposal ledger
+  contents: read               # the job changes nothing: not the CRM, not the repository
 
 jobs:
   sync:
@@ -33,19 +33,12 @@ jobs:
       - name: Tests
         run: python -m pytest -q
 
-      - name: Scrape, match, record proposals
+      # data/state.db in the repository is the ledger of decisions, committed by the reviewer after a
+      # review session (the review app is its only writer). The run reads it, so anything already
+      # approved or rejected is not proposed again; "new" in the summary is what is waiting for review.
+      # The job exits non-zero, proposing nothing, if the scrape looks incomplete or the CRM is unreachable.
+      - name: Scrape, match, report
         shell: bash               # bash here means -eo pipefail, so a failed run fails the job
         env:
           CRM_API_TOKEN: ${{ secrets.CRM_API_TOKEN }}
         run: python -m ownership_sync run | tee -a "$GITHUB_STEP_SUMMARY"
-
-      # The ledger (data/state.db) is what stops decided items from being proposed again, so it has
-      # to survive between runs. Committing it keeps this example self-contained; in production it
-      # would be a managed database shared by the job and the review app.
-      - name: Persist the proposal ledger
-        run: |
-          git config user.name "ownership-sync-bot"
-          git config user.email "ownership-sync-bot@users.noreply.github.com"
-          git add data/state.db
-          git diff --cached --quiet || git commit -m "Daily ownership sync: update proposal ledger"
-          git push

@@ -112,10 +112,10 @@ class Planner:
         for c in contacts:
             if c.get("is_active", True):
                 self.contacts_of[c["account_id"]].append(c)
-        used_as_parent = {a["parent_id"] for a in accounts if a["parent_id"]} | {self.tid}
-        # Facility records only. Records already resolved by an earlier run (marked duplicate, or a
+        # Facility records only: a record with a street address is a facility, one without is a
+        # company (parent) record. Records already resolved by an earlier run (marked duplicate, or a
         # CHOW predecessor) never take part in matching again - this is what lets re-runs converge.
-        self.facilities = [a for a in accounts if a["account_id"] not in used_as_parent]
+        self.facilities = [a for a in accounts if a["account_id"] != self.tid and (a["billing_street"] or "").strip()]
         self.live = [a for a in self.facilities if not a["duplicate_of_account"] and not a["chow_current_account"]]
 
     # ------------------------------------------------------------------ helpers

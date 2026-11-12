@@ -28,7 +28,7 @@
 {% if proposals|length > 3 %}
 <div class="index">
   {% for p in proposals %}
-    <div><span class="badge {{ p.category }}">{{ categories[p.category][0] }}</span><a href="#p{{ p.id }}">{{ p.title }}</a></div>
+    <div><span class="badge {{ p.category }}">{{ categories.get(p.category, [p.category])[0] }}</span><a href="#p{{ p.id }}">{{ p.title }}</a></div>
   {% endfor %}
 </div>
 {% endif %}
@@ -37,7 +37,7 @@
 {% set ev = p.evidence %}
 {% set next_anchor = ('p%d' % loop.nextitem.id) if loop.nextitem else '' %}
 <article class="card" id="p{{ p.id }}">
-  <span class="badge {{ p.category }}">{{ categories[p.category][0] }}</span>
+  <span class="badge {{ p.category }}">{{ categories.get(p.category, [p.category])[0] }}</span>
   <span class="badge {{ p.confidence }}">{{ p.confidence }} confidence</span>
   {% if tab != 'pending' %}<span class="badge {{ p.status }}">{{ p.status }}</span>{% endif %}
   <span class="muted">#{{ p.id }}</span>
@@ -116,14 +116,17 @@
     <summary>Exact API call(s) on approval</summary>
     {% for call in preview_calls(p) %}
       <pre>{{ call.method }} /api/v1{{ call.path }}
-{{ call.body|tojson(indent=2) }}</pre>
+{{ as_json(call.body) }}</pre>
     {% endfor %}
     <span class="muted">Notes are prefixed with a date stamp when written. Proposal fingerprint {{ p.fingerprint }}.</span>
   </details>
 
-  {% if p.status in ('pending', 'failed', 'applying') %}
+  {% if p.status == 'applying' %}
+  <p class="muted">This approval is being written to the CRM right now.</p>
+  {% endif %}
+  {% if p.status in ('pending', 'failed') %}
   <div class="actions">
-    <form method="post" action="{{ url_for('approve', pid=p.id) }}">
+    <form method="post" action="{{ url_for('approve', pid=p.id) }}" onsubmit="this.querySelector('button').disabled = true">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="tab" value="{{ tab }}"><input type="hidden" name="anchor" value="{{ next_anchor }}">
       <input type="text" name="note" placeholder="Approval note (optional)">
@@ -143,7 +146,7 @@
   {% if p.status != 'pending' %}
   <h3>Decision</h3>
   <p>{{ p.status }}{% if p.decided_by %} by {{ p.decided_by }} at {{ p.decided_at }}{% endif %}{% if p.decision_note %} - “{{ p.decision_note }}”{% endif %}</p>
-  {% if p.result %}<pre>{{ p.result|tojson(indent=2) }}</pre>{% endif %}
+  {% if p.result %}<pre>{{ as_json(p.result) }}</pre>{% endif %}
   {% if p.status == 'rejected' %}
   <form method="post" action="{{ url_for('reopen', pid=p.id) }}">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="tab" value="{{ tab }}">

@@ -36,7 +36,9 @@ CARE_TYPE_MAP = {
 
 # Abort a run (propose nothing) if the scrape finds fewer than this share of the previous run's
 # locations - a half-loaded website must never turn into a wave of "no longer on the website" flags.
-MIN_SCRAPE_RATIO = 0.8
+# If an operator really does shed more than 20% of its communities, acknowledge it by running once
+# with MIN_SCRAPE_RATIO=0.
+MIN_SCRAPE_RATIO = float(os.environ.get("MIN_SCRAPE_RATIO", "0.8"))
 
 
 def load_overrides(path=ROOT / "overrides.json"):

@@ -4,6 +4,7 @@ Every proposal is shown with its evidence. Approve executes it against the CRM; 
 decision. This module is the ONLY place a writable CRM client is created, and only inside approve().
 """
 import getpass
+import json
 import os
 import secrets
 
@@ -43,6 +44,12 @@ def create_app(db_path=None, crm_factory=None):
     reviewer = os.environ.get("REVIEWER") or getpass.getuser()
     crm_factory = crm_factory or (lambda: CrmClient(config.API_URL, config.API_TOKEN))
 
+    # Nothing can be mid-approval while the app is starting, so anything still marked as such was
+    # interrupted by a crash; make it retryable.
+    startup = Store(db_path or config.DB_PATH)
+    startup.recover_interrupted()
+    startup.close()
+
     def store():
         if "store" not in g:
             g.store = Store(db_path or config.DB_PATH)
@@ -55,14 +62,20 @@ def create_app(db_path=None, crm_factory=None):
             opened.close()
 
     @app.before_request
-    def require_form_token():
+    def local_requests_only():
+        # This page can write to the CRM and its links carry the API token, so it answers only for
+        # this machine's own hostnames (a hostile web page cannot reach it under another name)...
+        if request.host.partition(":")[0] not in ("127.0.0.1", "localhost"):
+            abort(400, "this app only answers on localhost")
+        # ...and every POST must carry the per-process form token, so only this UI can approve.
         if request.method == "POST" and request.form.get("csrf") != form_token:
             abort(400, "missing or wrong form token")
 
     @app.context_processor
     def template_helpers():
         return {"csrf": form_token, "categories": CATEGORIES, "crm_url": crm_url, "preview_calls": preview_calls,
-                "counts": store().counts(), "last_run": store().last_run(), "reviewer": reviewer}
+                "counts": store().counts(), "last_run": store().last_run(), "reviewer": reviewer,
+                "as_json": lambda value: json.dumps(value, indent=2, ensure_ascii=False)}
 
     def back(done=None):
         """Return to the queue; `done` makes it show that proposal's outcome in a banner."""
@@ -85,11 +98,15 @@ def create_app(db_path=None, crm_factory=None):
     def approve(pid):
         s = store()
         proposal = s.get(pid) or abort(404)
-        if not s.claim(pid, retry=proposal["status"] in ("failed", "applying")):
-            flash(f"Proposal #{pid} was already decided ({proposal['status']}); nothing was written.", "warn")
+        try:
+            crm = crm_factory()  # writable client: built only here, only for an explicit approval
+        except Exception as exc:  # e.g. no token configured: say so instead of half-starting
+            flash(f"Cannot approve #{pid}: {exc}", "error")
+            return back()
+        if not s.claim(pid):  # atomic: exactly one request can win, so a double click writes once
+            flash(f"Proposal #{pid} is already {s.get(pid)['status']}; nothing was written by this click.", "warn")
             return back()
         note = request.form.get("note", "").strip()
-        crm = crm_factory()  # writable client: built only here, only after an explicit approval
         try:
             result = apply_proposal(crm, proposal)
         except StaleProposal as exc:
@@ -120,12 +137,15 @@ def create_app(db_path=None, crm_factory=None):
     @app.post("/run")
     def run_now():
         try:
-            c = run_pipeline(store())["proposals"]
+            summary = run_pipeline(store())
         except Exception as exc:
             flash(f"Pipeline run failed, nothing proposed: {exc}", "error")
         else:
+            c = summary["proposals"]
             flash(f"Pipeline run finished: {c['new']} new proposal(s), {c['still_pending']} still pending, "
                   f"{c['already_decided']} already decided and not re-proposed, {c['auto_closed']} auto-closed.", "ok")
+            for warning in summary["scrape"]["warnings"] + c.get("applied_but_still_differs", []):
+                flash(f"Check: {warning}", "warn")
         return redirect(url_for("queue"))
 
     @app.get("/matches")

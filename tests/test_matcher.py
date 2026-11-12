@@ -202,3 +202,13 @@ def test_inactive_account_for_a_live_community_is_reactivated():
     sleeping = account("A1", "Bellhaven of Testville", "P1", parent_name=PARENT_NAME, status="Inactive", **AT)
     (p,) = plan_for([LOC], [PARENT, sleeping], [])["proposals"]
     assert changes(p) == {"status": "Active"}
+
+
+def test_a_facility_with_child_accounts_is_still_a_facility_and_company_records_are_not():
+    campus = account("A1", "Bellhaven of Testville", "P1", parent_name=PARENT_NAME, **AT)
+    wing = account("A2", "Testville Memory Wing", "A1", billing_street="12 Oak St", billing_city="Testville",
+                   billing_state="OH", billing_zip="44000")  # hangs off the campus account
+    subsidiary = account("P3", "Acquired Operator (Parent Account)", "P1", parent_name=PARENT_NAME)  # no address
+    plan = plan_for([LOC], [PARENT, OTHER, campus, wing, subsidiary], [])
+    assert match(plan, LOC.slug)["account_id"] == "A1"  # matched, not re-created
+    assert plan["proposals"] == [] and plan["unlisted"] == []  # the company record is not flagged as a missing facility

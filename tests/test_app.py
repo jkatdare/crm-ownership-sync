@@ -94,3 +94,82 @@ def test_stale_proposal_is_closed_instead_of_written(client, fake_crm):
     response = client.post(f"/proposals/{pid}/approve", data={"csrf": client.csrf}, follow_redirects=True)
     assert "Nothing written" in response.get_data(as_text=True)
     assert fake_crm.writes == [] and status_of(client, pid) == "obsolete"
+
+
+def set_field(client, pid, column, value):
+    store = Store(client.db)
+    with store.db:
+        store.db.execute(f"UPDATE proposals SET {column} = ? WHERE id = ?", (value, pid))
+    store.close()
+
+
+def test_overlapping_double_click_on_a_create_makes_one_account(client, fake_crm):
+    import threading
+    import time
+
+    slow_create = fake_crm.create_account
+
+    def create_slowly(fields):  # the first click is still talking to the CRM when the second arrives
+        time.sleep(0.3)
+        return slow_create(fields)
+
+    fake_crm.create_account = create_slowly
+    store = Store(client.db)
+    pid = next(p["id"] for p in store.list(("pending",)) if p["location_slug"] == "amberly-manor")
+    store.close()
+    app = client.application
+
+    def click():
+        app.test_client().post(f"/proposals/{pid}/approve", data={"csrf": client.csrf})
+
+    threads = [threading.Thread(target=click) for _ in range(2)]
+    threads[0].start()
+    time.sleep(0.1)
+    threads[1].start()
+    for t in threads:
+        t.join()
+    assert [w["method"] for w in fake_crm.writes] == ["POST"]
+    assert len([a for a in fake_crm.list_accounts() if a["name"] == "Amberly Manor" and a["billing_state"] == "OH"]) == 1
+    assert status_of(client, pid) == "applied"
+
+
+def test_approval_interrupted_by_a_crash_becomes_retryable_when_the_app_restarts(client, fake_crm):
+    pid = proposal_id(client, LIMA)
+    set_field(client, pid, "status", "applying")  # the process died mid-approval
+    restarted = create_app(db_path=client.db, crm_factory=lambda: fake_crm).test_client()
+    assert status_of(client, pid) == "failed"
+    page = restarted.get("/?status=failed").get_data(as_text=True)
+    token = re.search(r'name="csrf" value="([0-9a-f]+)"', page).group(1)
+    restarted.post(f"/proposals/{pid}/approve", data={"csrf": token})
+    assert status_of(client, pid) == "applied" and fake_crm.get_account(LIMA)["parent_id"] == BELLHAVEN
+
+
+def test_missing_token_is_reported_and_the_proposal_stays_pending(tmp_path, client):
+    from ownership_sync.crm import CrmError
+
+    def no_client():
+        raise CrmError("CRM_API_TOKEN is not set")
+
+    broken = create_app(db_path=client.db, crm_factory=no_client).test_client()
+    page = broken.get("/").get_data(as_text=True)
+    token = re.search(r'name="csrf" value="([0-9a-f]+)"', page).group(1)
+    pid = proposal_id(client, LIMA)
+    response = broken.post(f"/proposals/{pid}/approve", data={"csrf": token}, follow_redirects=True)
+    assert response.status_code == 200 and "CRM_API_TOKEN is not set" in response.get_data(as_text=True)
+    assert status_of(client, pid) == "pending"
+
+
+def test_requests_under_a_foreign_hostname_are_refused(client, fake_crm):
+    assert client.get("/", headers={"Host": "attacker.example:5000"}).status_code == 400
+    pid = proposal_id(client, LIMA)
+    response = client.post(f"/proposals/{pid}/approve", data={"csrf": client.csrf}, headers={"Host": "attacker.example:5000"})
+    assert response.status_code == 400 and fake_crm.writes == []
+
+
+def test_queue_survives_an_unknown_category_and_shows_request_bodies_verbatim(client):
+    set_field(client, proposal_id(client, LIMA), "category", "something_new")
+    response = client.get("/")
+    page = response.get_data(as_text=True)
+    assert response.status_code == 200 and "something_new" in page
+    # request bodies are shown as they are sent, not as JSON unicode escapes (u0026 for the ampersand, u003c for <)
+    assert "Rehabilitation &amp; Nursing of Grove City" in page and "u0026" not in page and "u003c" not in page

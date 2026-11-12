@@ -1,0 +1,41 @@
+"""The scheduled run: it must refuse to act on an incomplete scrape, and it must not write."""
+import pytest
+
+from ownership_sync import config
+from ownership_sync.pipeline import run_pipeline
+from ownership_sync.scraper import ScrapeError
+from ownership_sync.store import Store
+
+
+def scrape_returning(locations, **stats):
+    full = {"pages_crawled": 6, "communities_found": len(locations), "in_directory": len(locations) - 1,
+            "outside_directory": [], "directory_claims": len(locations) - 1, "home_page_claims": len(locations),
+            "warnings": [], **stats}
+    return lambda _base_url: (locations, full)
+
+
+def test_a_normal_run_records_proposals_and_never_writes(locations, fake_crm):
+    store = Store(":memory:")
+    summary = run_pipeline(store, crm=fake_crm, scrape_fn=scrape_returning(locations))
+    assert summary["proposals"]["new"] == 29 and summary["classification"]["confident_match"] == 17
+    assert store.last_run()["status"] == "ok" and fake_crm.writes == []
+
+
+def test_run_aborts_when_the_directory_count_does_not_match_what_was_scraped(locations, fake_crm):
+    store = Store(":memory:")
+    partial = locations[:32]  # three cards went missing from a directory page
+    with pytest.raises(ScrapeError, match="incomplete scrape"):
+        run_pipeline(store, crm=fake_crm, scrape_fn=scrape_returning(partial, directory_claims=34, in_directory=31))
+    assert store.last_run()["status"] == "error" and store.counts() == {}  # nothing proposed, even on a first run
+
+
+def test_sharp_drop_needs_a_human_to_acknowledge_it(locations, fake_crm, monkeypatch):
+    store = Store(":memory:")
+    run_pipeline(store, crm=fake_crm, scrape_fn=scrape_returning(locations))
+    shrunk = scrape_returning(locations[:20])  # self-consistent, but 15 communities fewer than yesterday
+    with pytest.raises(ScrapeError, match="MIN_SCRAPE_RATIO=0"):
+        run_pipeline(store, crm=fake_crm, scrape_fn=shrunk)
+    assert store.counts() == {"pending": 29}  # the queue is untouched by the refused run
+
+    monkeypatch.setattr(config, "MIN_SCRAPE_RATIO", 0.0)  # the operator confirms the drop is real
+    assert run_pipeline(store, crm=fake_crm, scrape_fn=shrunk)["scrape"]["communities_found"] == 20

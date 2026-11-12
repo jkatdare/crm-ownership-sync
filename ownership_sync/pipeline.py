@@ -11,12 +11,19 @@ def run_pipeline(store, crm=None, scrape_fn=scrape):
     run_id = store.start_run()
     try:
         locations, scrape_stats = scrape_fn(config.BASE_URL)
-        # Never act on a partial scrape: a half-loaded site would look like dozens of closed facilities.
+        # Never act on a partial scrape: a half-loaded site would look like closed or sold facilities.
+        # 1. The directory states how many communities it lists; scraping a different number from it
+        #    proves the crawl was incomplete (or double counted). This also protects the very first run.
+        claimed = scrape_stats.get("directory_claims")
+        if claimed is not None and claimed != scrape_stats["in_directory"]:
+            raise ScrapeError(f"the directory says it lists {claimed} communities but {scrape_stats['in_directory']} "
+                              "were scraped from it; refusing to propose anything from an incomplete scrape")
+        # 2. A sharp drop against the last good run needs a human to acknowledge it.
         previous = store.last_run("ok")
         baseline = previous["summary"]["scrape"]["communities_found"] if previous else 0
         if not locations or len(locations) < config.MIN_SCRAPE_RATIO * baseline:
-            raise ScrapeError(f"scraped {len(locations)} communities but the last good run had {baseline}; "
-                              "refusing to propose anything from what looks like a partial scrape")
+            raise ScrapeError(f"scraped {len(locations)} communities but the last good run had {baseline}; refusing to "
+                              "propose anything. If the drop is real, acknowledge it by running once with MIN_SCRAPE_RATIO=0")
 
         crm = crm or CrmClient(config.API_URL, config.API_TOKEN, read_only=True)  # read-only by construction
         accounts, contacts = crm.list_accounts(), crm.list_contacts()

@@ -138,7 +138,10 @@ Nothing writes without approval, structurally:
 
 - The daily job builds its CRM client with `read_only=True`; any write through it raises.
 - The only writable client is created inside the app's `approve()` handler.
-- Every POST to the app must carry a per-process form token, so only the UI can approve.
+- Every POST to the app must carry a per-process form token, and the app answers only on
+  `localhost` / `127.0.0.1`, so only this UI can approve.
+- A proposal is claimed atomically before anything is written, so a double click (or a Retry racing
+  the first attempt) executes it once.
 
 When an approval is executed:
 
@@ -154,17 +157,23 @@ When an approval is executed:
 
 ## Running it daily
 
-[`.github/workflows/daily-sync.yml`](.github/workflows/daily-sync.yml) runs the job every day at
-11:00 UTC, with `CRM_API_TOKEN` as a repository secret. It runs the tests, runs the pipeline, and
-commits the ledger so decisions survive between runs.
+The job is one command, `python -m ownership_sync run`. It is read-only against the CRM, exits
+non-zero (and proposes nothing) if the scrape looks incomplete or the CRM cannot be read, and is safe
+to run as often as you like.
 
-The equivalent cron entry on a single box that also hosts the review app:
+**On the machine that hosts the review app** - the setup I would use, because the job and the app
+then share one ledger and there is nothing to keep in sync:
 
 ```
 0 6 * * *  cd /opt/ownership-sync && .venv/bin/python -m ownership_sync run >> sync.log 2>&1
 ```
 
-The job exits non-zero if the scrape or the CRM read fails, and proposes nothing in that case.
+**As a GitHub Actions workflow** - [`.github/workflows/daily-sync.yml`](.github/workflows/daily-sync.yml)
+runs every day at 11:00 UTC with `CRM_API_TOKEN` as a repository secret. It runs the tests, runs the
+pipeline against the ledger committed in the repository, and writes the result to the run summary
+("N new proposals awaiting review"). It deliberately does not commit anything: the ledger has exactly
+one writer, the review app. The reviewer presses **Run pipeline now** (same fingerprints, so the same
+proposals), decides, and pushes `data/state.db`.
 
 ## Why re-runs are safe
 
@@ -179,15 +188,17 @@ Two independent mechanisms:
    `tests/test_reruns.py` approves the whole queue against a fake CRM and asserts that the next run
    proposes nothing and classifies all 35 locations as confident matches.
 
-A partial scrape cannot cause damage either: if a run finds fewer than 80% of the communities the
-last good run found, it aborts before proposing anything.
+A partial scrape cannot cause damage either. A run aborts before proposing anything if the directory
+says it lists N communities and a different number was scraped from it, or if it finds fewer than 80%
+of the communities the last good run found (a real drop that large has to be acknowledged by running
+once with `MIN_SCRAPE_RATIO=0`).
 
 ## State
 
 `data/state.db` (SQLite) holds runs, proposals, decisions and the audit log. It contains no secrets.
-It is committed on purpose: it is the record of what was decided and why, and it is what the
-scheduled job needs to avoid re-proposing. In production this would be a managed database shared by
-the job and a hosted review app.
+It is committed on purpose: it is the record of what was decided and why. It has one writer - the
+machine running the review app - so commit and push it after a review session. In production this
+would be a managed database shared by the job and a hosted review app.
 
 ## Where to change things
 

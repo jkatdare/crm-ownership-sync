@@ -29,8 +29,20 @@ If the best two are separated by nothing stronger than the last criterion, the p
 ambiguous instead of pretending to be sure.
 
 Result on the sandbox: 35 website locations (34 in the directory + 1 linked only from the home
-page), 17 confident matches, 14 matches needing a fix, 4 with no CRM account, and 3 accounts under
-the Bellhaven parent that are no longer on the website - 28 proposals in total.
+page): 17 confident matches, 14 matches needing a fix, 4 with no CRM account; plus 3 accounts under
+the Bellhaven parent that are no longer on the website. That is 29 proposals:
+
+| Proposals | Count | Which |
+|---|---|---|
+| Change of ownership (SOP) | 3 | Tiffin, Marietta (new account + link); Sandusky (link to the existing Millstone account) |
+| Wrong parent, re-parented directly | 4 | Findlay, Lima, Zanesville, Kettering |
+| Duplicate records | 7 | Owosso, Port Clinton, Erie, Monroe x2, Kettering x2 |
+| No CRM account yet | 4 | Batavia, Carlisle, Union Square, Amberly Manor |
+| Outdated name | 3 | Chesterton, Chagrin Falls, Willow Creek |
+| Minor name spelling | 4 | Grove City, Sycamore Ridge, Arbors Dayton, Ashland |
+| No longer on the website, new owner unknown | 2 | Alliance, Coldwater |
+| Data fix | 1 | Portsmouth zip |
+| Address note (optional) | 1 | Ashtabula |
 
 ## Choices for outcomes that are not simple field updates
 
@@ -59,21 +71,30 @@ just not one to route through Bellhaven's corporate office. Not un-parented: tha
 
 **Duplicates.** The losing copy gets `duplicate_of_account` = survivor, `status = Inactive` and a
 note, per the brief. Its parent is left as it was - it is a dead record, and the old parent is part
-of its history. Records under a previous owner for a facility that already has a Bellhaven account
-(Port Clinton, Erie, Monroe x2) are treated as duplicates rather than CHOW cases because none has
-revenue or AR: the SOP would allow re-parenting them, but that would only produce a second Bellhaven
-record for the same building. If such a record did have revenue and open AR, the code preserves it
-and links it with `chow_current_account` instead of deactivating it.
+of its history. Because the API has no merge, the tool also moves the losing copy's contacts to the
+survivor (a contact's `account_id` is writable), so nobody is stranded on an inactive record; in
+this data that is one contact, on the second Owosso record. Records under a previous owner for a
+facility that already has a Bellhaven account (Port Clinton, Erie, Monroe x2) are treated as
+duplicates rather than CHOW cases because none has revenue or AR: the SOP would allow re-parenting
+them, but that would only produce a second Bellhaven record for the same building. If such a record
+did have revenue and open AR, the code preserves it and links it with `chow_current_account`
+instead of deactivating it.
 
 **Three records, none under Bellhaven, nothing to tell them apart (Kettering).** One has no parent,
 one is under Cedar Trail, one under Harborview; none has revenue, AR, contacts or a matching phone.
 The tool picks the unparented record as the survivor (re-parent + rename), marks the other two as
-duplicates, flags all three proposals as ambiguous, and lets the reviewer pin a different survivor
-in `overrides.json`. **TODO: state which one I kept and why.**
+duplicates, flags all three proposals as ambiguous, says so in the note, and lets the reviewer pin
+a different survivor in `overrides.json`. **TODO: state which one I kept and why.**
+
+**Notes as the ownership trail.** The CRM keeps no field history, so a re-parent or rename would
+erase exactly the history this exercise is about. Every change to an existing record therefore also
+writes what it replaced ("parent was Harborview Care Group", "name was Sunny Acres Retirement
+Home", "zip was 45626"), date-stamped and appended to any existing note. The exception is a
+CHOW-preserved account, which gets only the link.
 
 **PO box (Ashtabula).** Matched with high confidence on name, city, zip, phone and administrator.
 I did not overwrite the PO box with the website's street: the field is a *billing* street, and a PO
-box is a legitimate billing address.
+box is a legitimate billing address. An optional proposal adds the physical address to the note.
 
 **Zip typo (Portsmouth).** Same street, city, state, name, phone and administrator, zip 45626 vs
 45662 - a transposition. Corrected, because here the billing address *is* the physical address.
@@ -83,9 +104,9 @@ box is a legitimate billing address.
 as a separate low-stakes category rather than silently ignoring or silently changing them.
 **TODO: say which I approved / rejected.**
 
-**Left alone on purpose.** Phone numbers and contacts are used as matching evidence only; the brief
-scopes the scrape to name, address and care offerings, and a website front-desk number is not
-obviously better than the number billing has on file. Accounts under other parents that merely
+**Left alone on purpose.** Phone numbers and existing contacts are used as matching evidence only;
+the brief scopes the scrape to name, address and care offerings, and a website front-desk number is
+not obviously better than the number billing has on file. Accounts under other parents that merely
 resemble a Bellhaven community are never touched.
 
 ## How I used AI tools
@@ -95,25 +116,33 @@ this section so it reflects my own direction and checks.**
 
 - **Exploration before code.** Claude read the website and the API read-only, and mapped all 35
   locations against all 121 accounts by hand before writing a matcher. That is where the site's
-  traps surfaced (the page clamp, the community missing from the directory) and where the scenario
-  list came from.
+  traps surfaced (out-of-range pages re-serving the last page, the community missing from the
+  directory) and where the scenario list came from.
 - **API contract without side effects.** The docs do not describe request bodies, so the write
   contract was learned from requests designed to be rejected (empty bodies, an invalid status) and
   the account was re-read afterwards to confirm nothing had changed.
-- **Independent cross-check.** Three AI reviewers were given only the raw data and the brief (not
-  my plan) and each derived the expected end state; a fourth reconciled them. I compared that with
-  the tool's 28 proposals. **TODO: note where they disagreed and what I decided.**
-- **Adversarial code review.** Five reviewers each attacked one risk area (SOP and matching,
-  re-run safety, write safety, scraper, app and CI); a second agent then tried to refute each
-  finding before I acted on it.
-- **Tests as the check on the AI.** 64 tests, including one that approves the whole queue against
-  a fake CRM built from the real sandbox seed and asserts the next run proposes nothing.
+- **Independent cross-check of the answer.** Three AI reviewers were given only the raw data and the
+  brief - not the tool's output - and each derived the end state the CRM should reach, from three
+  angles (sales ops, billing audit, "what did the test author plant"). All three matched the tool on
+  every account, including the same Kettering tie-break. Two of their ideas were better than mine
+  and I adopted them: record what a change replaced in the note, and note Ashtabula's physical
+  address instead of doing nothing.
+- **Adversarial code review.** Five reviewers each attacked one risk area (SOP and matching, re-run
+  safety, write safety, scraper, app and CI), and a second agent tried to refute each finding. It
+  found real problems that my tests had missed, which I fixed and covered with tests: an overlapping
+  double click on Approve could execute a proposal twice and create two accounts; a partial scrape
+  that the scraper itself had flagged was still acted on; a transient outage on a secondary page was
+  treated as a dead link; and the scheduled workflow and the reviewer both wrote the ledger file.
+  **TODO: add anything from the remaining reviewers.**
+- **Tests as the check on the AI.** The suite runs against an in-memory fake CRM seeded from the
+  real sandbox data, including one test that approves the whole queue and asserts the next run
+  proposes nothing and every location is a confident match.
 - **Me.** Every write to the CRM was a proposal I read and approved in the review app.
 
 ## What I would build next
 
 1. **Contacts.** The website names each administrator; the CRM's administrator contacts are stale
-   for several communities. Propose contact updates the same way accounts are handled.
+   for several communities, and new accounts start with none. Propose contact changes the same way.
 2. **Find the new owner.** For facilities that leave an operator, look at other operators' sites
    and public facility registries so "Needs Review" becomes "moved to X".
 3. **A grace period for removals.** Track first-seen / last-seen per location and only flag an

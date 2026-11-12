@@ -1,7 +1,7 @@
 import pytest
 
 from conftest import FIXTURES
-from ownership_sync.scraper import ScrapeError, parse_detail, scrape
+from ownership_sync.scraper import PageGone, ScrapeError, fetch, parse_detail, scrape
 
 
 def detail(name, street="1 Main St", place="Springfield, OH 45501"):
@@ -23,10 +23,10 @@ SITE = {
                            '<a href="/communities/beta">Beta</a><div class="pager"><a href="/communities?page=2">Next</a></div>',
     "/communities?page=2": LAST_PAGE,
     "/communities?page=3": LAST_PAGE,  # out-of-range pages re-serve the last page, like the real site
-    "/communities/alpha": detail("Alpha House"),
-    "/communities/beta": detail("Beta House"),
-    "/communities/gamma": detail("Gamma House"),
-    "/communities/hidden-new-one": detail("Hidden New One"),
+    "/communities/alpha": detail("Alpha House", "1 Main St"),
+    "/communities/beta": detail("Beta House", "2 Main St"),
+    "/communities/gamma": detail("Gamma House", "3 Main St"),
+    "/communities/hidden-new-one": detail("Hidden New One", "4 Main St"),
 }
 
 
@@ -71,26 +71,71 @@ def test_unparseable_community_page_aborts_instead_of_being_skipped():
         scrape("https://example.test", fetch_fn=lambda s, url: site[url.removeprefix("https://example.test")])
 
 
-def test_dead_nav_link_is_skipped_with_a_warning_but_a_dead_directory_page_aborts():
-    def fetch_with_dead(dead):
-        def fetch_fn(_session, url):
-            path = url.removeprefix("https://example.test")
-            if path == dead:
-                raise ScrapeError(f"{url}: 404")
-            return SITE[path]
-        return fetch_fn
+def failing(path_to_fail, error):
+    def fetch_fn(_session, url):
+        path = url.removeprefix("https://example.test")
+        if path == path_to_fail:
+            raise error(f"{url}: failed")
+        return SITE[path]
+    return fetch_fn
 
-    locations, stats = scrape("https://example.test", fetch_fn=fetch_with_dead("/about"))
+
+def test_dead_nav_link_is_skipped_with_a_warning():
+    locations, stats = scrape("https://example.test", fetch_fn=failing("/about", PageGone))
     assert len(locations) == 4 and any("/about" in w for w in stats["warnings"])
-    with pytest.raises(ScrapeError):
-        scrape("https://example.test", fetch_fn=fetch_with_dead("/communities?page=2"))
+
+
+def test_outage_on_any_page_or_a_missing_directory_page_aborts():
+    with pytest.raises(ScrapeError):  # a timeout / 5xx on a secondary page: it might have linked a community
+        scrape("https://example.test", fetch_fn=failing("/about", ScrapeError))
+    with pytest.raises(ScrapeError):  # the directory itself must load, even a 404 there is fatal
+        scrape("https://example.test", fetch_fn=failing("/communities?page=2", PageGone))
+
+
+def test_same_address_under_two_urls_aborts():
+    site = dict(SITE)
+    site["/"] += '<a href="/communities/alpha-renamed">Alpha, rebranded</a>'
+    site["/communities/alpha-renamed"] = detail("Alpha Gardens", "1 Main Street")
+    with pytest.raises(ScrapeError, match="share one address"):
+        scrape("https://example.test", fetch_fn=lambda s, url: site[url.removeprefix("https://example.test")])
+
+
+class FakeResponse:
+    def __init__(self, status_code, text="<html></html>"):
+        self.status_code, self.text = status_code, text
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import requests
+            raise requests.HTTPError(f"HTTP {self.status_code}")
+
+
+class FakeSession:
+    def __init__(self, *statuses):
+        self.statuses, self.calls = list(statuses), 0
+
+    def get(self, url, timeout):
+        self.calls += 1
+        return FakeResponse(self.statuses[min(self.calls, len(self.statuses)) - 1])
+
+
+def test_fetch_tells_a_dead_link_from_an_outage(monkeypatch):
+    monkeypatch.setattr("ownership_sync.scraper.time.sleep", lambda _s: None)
+    with pytest.raises(PageGone):
+        fetch(FakeSession(404), "https://example.test/x")
+    for status in (503, 429):  # retried, then a plain ScrapeError - never mistaken for a dead link
+        session = FakeSession(status)
+        with pytest.raises(ScrapeError) as err:
+            fetch(session, "https://example.test/x")
+        assert not isinstance(err.value, PageGone) and session.calls == 3
+    assert fetch(FakeSession(503, 200), "https://example.test/x") == "<html></html>"  # recovers on retry
 
 
 def test_unusual_slugs_and_non_page_links_are_handled():
     site = dict(SITE)
     site["/"] += ('<a href="/communities/Delta_House.2">Delta</a><a href="/files/brochure.pdf">Brochure</a>'
                   '<a href="/api/docs">API</a><a href="mailto:hello@example.test">Mail</a><a href="https://elsewhere.test/x">Out</a>')
-    site["/communities/Delta_House.2"] = detail("Delta House")
+    site["/communities/Delta_House.2"] = detail("Delta House", "5 Main St")
     requested = []
 
     def fetch_fn(_session, url):
