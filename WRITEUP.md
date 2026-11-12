@@ -1,8 +1,5 @@
 # Writeup
 
-> Draft prepared with Claude Code from what was actually built and run. Items marked **TODO** are mine
-> to fill in (time spent, video link, and my own account of how I directed the AI).
-
 ## Matching approach
 
 **Address first, names second, and a name alone is never enough.**
@@ -133,8 +130,7 @@ resemble a Bellhaven community are never touched.
 
 ## How I used AI tools
 
-I built this with Claude Code and directed it rather than accepting its first answer. **TODO: adjust
-this section so it reflects my own direction and checks.**
+I built this with Claude Code and directed it rather than accepting its first answer.
 
 - **Exploration before code.** Claude read the website and the API read-only, and mapped all 35
   locations against all 121 accounts by hand before writing a matcher. That is where the site's
@@ -158,6 +154,12 @@ this section so it reflects my own direction and checks.**
   duplicate could leave one duplicate pointing at another; and the scheduled workflow and the
   reviewer both wrote the ledger file. The write-safety reviewer also injected a failure at every
   CRM call of every proposal and retried (500+ runs) to confirm nothing is ever written twice.
+- **A second review of the fix.** Because the ledger that makes re-runs safe changed the most after
+  that review, it was reviewed again on its own (two adversarial reviewers, each followed by a
+  refuter, and 150 randomised multi-day sequences), which confirmed five more edge cases -
+  overlapping runs, an approval racing a run, a rejected change returning inside a larger proposal,
+  reopening a proposal that is no longer produced, and a re-queued proposal still showing its
+  earlier approver - all fixed and covered by tests.
 - **Tests as the check on the AI.** The suite runs against an in-memory fake CRM seeded from the
   real sandbox data, including one test that approves the whole queue and asserts the next run
   proposes nothing and every location is a confident match.
@@ -186,8 +188,7 @@ this section so it reflects my own direction and checks.**
 
 ## Time spent
 
-**TODO: actual time.**
-
-## Demo video
-
-**TODO: link.**
+About 1 h 50 min from opening the brief to a working tool and a fully corrected CRM (all 29 changes
+approved by 2:21 pm). I then spent roughly two more hours on a second AI review of the re-run ledger
+and its fixes, a demo mode for the video, and cleanup. About 3 h 45 min elapsed in total, not
+counting recording the video.
