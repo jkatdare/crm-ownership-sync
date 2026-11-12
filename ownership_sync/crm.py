@@ -18,7 +18,7 @@ class CrmError(RuntimeError):
 class CrmClient:
     def __init__(self, api_url, token, read_only=False, session=None):
         if not token:
-            raise CrmError("CRM_API_TOKEN is not set - copy .env.example to .env and add your token")
+            raise CrmError("CRM_API_TOKEN is not set - create a .env file containing CRM_API_TOKEN=<your token> (see the README)")
         self.api_url = api_url.rstrip("/")
         self.read_only = read_only
         self.writes = []

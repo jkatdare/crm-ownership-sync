@@ -29,7 +29,11 @@ python -m venv .venv
 
 (On macOS/Linux use `.venv/bin/` instead of `.venv/Scripts/`.)
 
-Copy `.env.example` to `.env` and put your sandbox token in `CRM_API_TOKEN`. `.env` is gitignored.
+Create a file named `.env` in the project root with your sandbox token on one line. `.env` is gitignored.
+
+```
+CRM_API_TOKEN=<your sandbox token>
+```
 
 ```bash
 .venv/Scripts/python -m ownership_sync run
