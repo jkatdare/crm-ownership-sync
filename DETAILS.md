@@ -1,4 +1,7 @@
-# Writeup
+# Details
+
+The longer version of [WRITEUP.md](WRITEUP.md): the end state, the reasoning behind each change, and
+more on the AI reviews.
 
 ## Matching approach
 

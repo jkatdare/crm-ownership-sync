@@ -15,7 +15,8 @@ decision, once made, is never asked for again.
         └──────────── daily job: read-only ───────────────┘                └──── only place that writes ────┘
 ```
 
-See [WRITEUP.md](WRITEUP.md) for the matching approach, the judgment calls and what I would build next.
+See [WRITEUP.md](WRITEUP.md) for the matching approach, how I used AI tools and what I would build
+next, and [DETAILS.md](DETAILS.md) for the judgment calls behind each change.
 
 ## Quick start
 
