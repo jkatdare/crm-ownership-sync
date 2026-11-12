@@ -210,3 +210,45 @@ def test_demo_mode_reads_and_writes_only_the_in_memory_copy(tmp_path, locations,
 def test_the_demo_account_page_does_not_exist_outside_demo_mode(client):
     assert client.get(f"/demo/accounts/{LIMA}").status_code == 404
     assert "DEMO MODE" not in client.get("/").get_data(as_text=True)
+
+
+def test_approval_that_races_a_run_refreshing_the_proposal_writes_nothing(client, fake_crm, locations, monkeypatch):
+    """The page version is checked again inside the claim, so a run that lands between the read and the claim wins."""
+    pid = proposal_id(client, LIMA)
+    real_claim = Store.claim
+
+    def claim_after_a_run_slipped_in(self, proposal_id, expect_run=None):
+        other = Store(client.db)  # a pipeline run commits between the handler's read and its claim
+        run_id = other.start_run()
+        other.sync_proposals(run_id, build_plan(locations, fake_crm.list_accounts(), fake_crm.list_contacts(), PARENT_NAME)["proposals"])
+        other.finish_run(run_id, "ok", {})
+        other.close()
+        return real_claim(self, proposal_id, expect_run)
+
+    monkeypatch.setattr(Store, "claim", claim_after_a_run_slipped_in)
+    seen = Store(client.db).get(pid)["last_run_id"]
+    response = client.post(f"/proposals/{pid}/approve", data={"csrf": client.csrf, "seen": seen}, follow_redirects=True)
+    assert "refreshed by a pipeline run while you were approving" in response.get_data(as_text=True)
+    assert fake_crm.writes == [] and status_of(client, pid) == "pending"
+
+
+def test_reopen_is_refused_once_the_latest_run_no_longer_produces_the_proposal(client, fake_crm, locations):
+    pid = proposal_id(client, LIMA)
+    client.post(f"/proposals/{pid}/reject", data={"csrf": client.csrf})
+    plan_now = build_plan(locations, fake_crm.list_accounts(), fake_crm.list_contacts(), PARENT_NAME)["proposals"]
+
+    def run(proposals):
+        store = Store(client.db)
+        run_id = store.start_run()
+        store.sync_proposals(run_id, proposals)
+        store.finish_run(run_id, "ok", {})
+        store.close()
+
+    run(plan_now)  # still produced: reopening is fine, so reject it again afterwards
+    client.post(f"/proposals/{pid}/reopen", data={"csrf": client.csrf})
+    assert status_of(client, pid) == "pending"
+    client.post(f"/proposals/{pid}/reject", data={"csrf": client.csrf})
+
+    run([p for p in plan_now if p["account_id"] != LIMA])  # the situation went away (someone fixed the parent by hand)
+    response = client.post(f"/proposals/{pid}/reopen", data={"csrf": client.csrf}, follow_redirects=True)
+    assert "nothing to reopen" in response.get_data(as_text=True) and status_of(client, pid) == "rejected"

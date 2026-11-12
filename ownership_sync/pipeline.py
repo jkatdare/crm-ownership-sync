@@ -29,7 +29,7 @@ def run_pipeline(store, crm=None, scrape_fn=scrape):
         crm = crm or CrmClient(config.API_URL, config.API_TOKEN, read_only=True)  # read-only by construction
         accounts, contacts = crm.list_accounts(), crm.list_contacts()
         pins = config.load_overrides().get("survivor_pins")
-        plan = build_plan(locations, accounts, contacts, config.TARGET_PARENT_NAME, pins)
+        plan = build_plan(locations, accounts, contacts, config.TARGET_PARENT_NAME, pins, store.declined_changes())
 
         summary = {
             "scrape": scrape_stats,
@@ -68,7 +68,7 @@ def rehearse(store, live_crm=None, scrape_fn=scrape):
                             "error": f"{type(exc).__name__}: {exc}"})
     locations, _stats = scrape_fn(config.BASE_URL)
     after = build_plan(locations, rehearsal.list_accounts(), rehearsal.list_contacts(), config.TARGET_PARENT_NAME,
-                       config.load_overrides().get("survivor_pins"))
+                       config.load_overrides().get("survivor_pins"), store.declined_changes())
     return {"accounts": live_accounts,
             "results": results,
             "remaining": [p["title"] for p in after["proposals"]],

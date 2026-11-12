@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS audit (
 DECIDED = ("applied", "rejected", "failed", "applying")
 
 
+class RunOvertaken(RuntimeError):
+    """A newer run recorded its results while this one was still working, so this one records nothing."""
+
+
 def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
 
@@ -112,6 +116,13 @@ class Store:
             # Take the write lock before reading anything. A decision made while a run is syncing then
             # waits for the sync (and the sync for it) instead of being overwritten by a stale read.
             self.db.execute("BEGIN IMMEDIATE")
+            # Two runs can overlap (the scheduled job and "Run pipeline now"). If a later-started run has
+            # already recorded its results, this one holds older data: it must not overwrite the ledger
+            # or move last_run_id backwards, which "came back" below relies on.
+            if self.db.execute("SELECT 1 FROM runs WHERE id > ? AND status = 'ok' UNION ALL"
+                               " SELECT 1 FROM proposals WHERE last_run_id > ? LIMIT 1", (run_id, run_id)).fetchone():
+                raise RunOvertaken(f"run {run_id} was overtaken by a newer run that already recorded its results; "
+                                   "this run recorded nothing")
             previous_ok = self.db.execute("SELECT MAX(id) FROM runs WHERE status = 'ok' AND id < ?", (run_id,)).fetchone()[0]
             for p in proposals:
                 seen.add(p["fingerprint"])
@@ -134,6 +145,14 @@ class Store:
                     counts["still_pending" if row["status"] == "pending" else "reopened"] += 1
                     if row["status"] == "applied":
                         undone.append(p["title"])
+                        # It is pending again by the pipeline's doing, not the reviewer's: clear the old
+                        # decision from the row (the audit log keeps it) and record who re-queued it.
+                        self.db.execute("UPDATE proposals SET decided_at=NULL, decided_by=NULL, decision_note=NULL WHERE id=?",
+                                        (row["id"],))
+                        self.db.execute("INSERT INTO audit (at, proposal_id, event, detail_json) VALUES (?,?,?,?)",
+                                        (now(), row["id"], "pending", json.dumps({
+                                            "by": "system",
+                                            "note": f"applied earlier, undone in the CRM since; queued again by run {run_id}"})))
                 else:
                     # Approved, rejected, failed or in flight: a human has dealt with it. NOT back in the queue.
                     if row["status"] in ("rejected", "failed"):
@@ -175,13 +194,27 @@ class Store:
     def counts(self):
         return dict(self.db.execute("SELECT status, COUNT(*) FROM proposals GROUP BY status").fetchall())
 
-    def claim(self, proposal_id):
+    def claim(self, proposal_id, expect_run=None):
         """Atomically take a proposal for applying. Only one request can win, so a double click
-        (or a Retry racing the first attempt) can never execute the same proposal twice."""
+        (or a Retry racing the first attempt) can never execute the same proposal twice.
+
+        With expect_run the claim also fails if a pipeline run has refreshed the proposal since the
+        caller read it - checked in the same statement, so there is no gap for a run to slip into."""
         with self.db:
             cur = self.db.execute(
-                "UPDATE proposals SET status = 'applying' WHERE id = ? AND status IN ('pending', 'failed')", (proposal_id,))
+                "UPDATE proposals SET status = 'applying' WHERE id = ? AND status IN ('pending', 'failed')"
+                " AND (? IS NULL OR last_run_id = ?)", (proposal_id, expect_run, expect_run))
         return cur.rowcount == 1
+
+    def declined_changes(self):
+        """{account_id: [field changes of each rejected patch]} - what the reviewer has said no to."""
+        declined = {}
+        for row in self.db.execute("SELECT account_id, payload_json FROM proposals"
+                                   " WHERE status = 'rejected' AND kind = 'patch'").fetchall():
+            fields = {k: v for k, v in json.loads(row["payload_json"]).get("fields", {}).items() if k != "note"}
+            if fields:
+                declined.setdefault(row["account_id"], []).append(fields)
+        return declined
 
     def recover_interrupted(self):
         """Run once when the review app starts. Nothing can be mid-flight at that moment, so a row

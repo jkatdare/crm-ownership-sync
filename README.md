@@ -145,7 +145,8 @@ Nothing writes without approval, structurally:
 - Every POST to the app must carry a per-process form token, and the app answers only on
   `localhost` / `127.0.0.1`, so only this UI can approve.
 - A proposal is claimed atomically before anything is written, so a double click (or a Retry racing
-  the first attempt) executes it once.
+  the first attempt) executes it once. The same statement checks that the proposal is still the
+  version the reviewer's page showed, so a pipeline run cannot slip in between the check and the write.
 
 When an approval is executed:
 
@@ -227,11 +228,17 @@ Two independent mechanisms:
    A decision holds for as long as the situation it was made about persists:
    - a **rejected** proposal stays rejected, even if it disappears for a while and comes back (the
      run then says so, in case it is a new event worth reopening);
+   - rejecting a proposal declines each change in it. If another field on the same account later
+     needs fixing, only that field is proposed - the rejected change does not ride back in on a
+     bigger bundle;
    - an **applied** proposal that is still produced on the next run is reported ("applied, but the
      CRM still differs") rather than queued again;
    - an applied proposal that went away - the fix was in place - and is produced again later means
      someone undid the fix in the CRM. That is a new event, so it is queued again, with the earlier
      approval kept in the audit log.
+
+   Two runs can overlap (the scheduled job and the **Run pipeline now** button). A run that finds a
+   later-started run has already recorded its results holds older data, so it records nothing.
 2. **Convergence.** Records resolved by an earlier approval (marked duplicate, CHOW-linked, flagged)
    are recognised and left alone, so an approved change does not come back as a new diff.
    `tests/test_reruns.py` approves the whole queue against a fake CRM and asserts that the next run

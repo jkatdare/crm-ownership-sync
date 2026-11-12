@@ -115,8 +115,15 @@ def create_app(db_path=None, crm_factory=None, demo_crm=None):
         except Exception as exc:  # e.g. no token configured: say so instead of half-starting
             flash(f"Cannot approve #{pid}: {exc}", "error")
             return back()
-        if not s.claim(pid):  # atomic: exactly one request can win, so a double click writes once
-            flash(f"Proposal #{pid} is already {s.get(pid)['status']}; nothing was written by this click.", "warn")
+        # Atomic: exactly one request can win, so a double click writes once - and only if the row is
+        # still the version read above (a run that refreshed it in the meantime makes the claim fail).
+        if not s.claim(pid, proposal["last_run_id"]):
+            current = s.get(pid)
+            if current["status"] in ("pending", "failed"):
+                flash(f"Proposal #{pid} was refreshed by a pipeline run while you were approving it. Nothing was "
+                      "written - please review it again.", "warn")
+            else:
+                flash(f"Proposal #{pid} is already {current['status']}; nothing was written by this click.", "warn")
             return back()
         note = request.form.get("note", "").strip()
         first = len(crm.writes)  # the audit trail of THIS approval starts here
@@ -143,7 +150,15 @@ def create_app(db_path=None, crm_factory=None, demo_crm=None):
 
     @app.post("/proposals/<int:pid>/reopen")
     def reopen(pid):
-        if store().decide(pid, "pending", reviewer, "reopened by reviewer", only_if="rejected"):
+        s = store()
+        row = s.get(pid) or abort(404)
+        last_ok = s.last_run("ok")
+        # A rejected proposal is kept current only while runs still produce it. If the latest run did
+        # not, the situation it described is gone and its content is out of date: nothing to reopen.
+        if row["status"] == "rejected" and last_ok and (row["last_run_id"] or 0) < last_ok["id"]:
+            flash(f"Proposal #{pid} is no longer being proposed (the latest run did not produce it), so there is "
+                  "nothing to reopen. If the situation returns, the run will say so.", "warn")
+        elif s.decide(pid, "pending", reviewer, "reopened by reviewer", only_if="rejected"):
             flash(f"Reopened #{pid}.", "ok")
         return back()
 

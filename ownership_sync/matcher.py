@@ -106,13 +106,14 @@ def fingerprint(proposal):
 
 
 class Planner:
-    def __init__(self, accounts, contacts, parent_name, pins=None):
+    def __init__(self, accounts, contacts, parent_name, pins=None, declined=None):
         parents = [a for a in accounts if a["name"] == parent_name]
         if len(parents) != 1:
             raise ValueError(f"expected exactly one CRM account named {parent_name!r}, found {len(parents)}")
         self.target = parents[0]
         self.tid = self.target["account_id"]
         self.pins = pins or {}
+        self.declined = declined or {}  # {account_id: [field changes the reviewer has rejected]}
         self.by_id = {a["account_id"]: a for a in accounts}
         self.contacts_of = defaultdict(list)
         for c in contacts:
@@ -315,6 +316,14 @@ class Planner:
             fields["care_type"] = care[0]
         if a["status"] != "Active":  # Inactive, or flagged Needs Review while it was off the website
             fields["status"] = "Active"
+
+        # A rejected change must not ride back in on a different bundle. If exactly this set of changes
+        # was rejected, keep it as it is (the ledger recognises it and leaves it rejected); otherwise
+        # propose only the changes the reviewer has not already said no to for this account.
+        rejected = self.declined.get(a["account_id"], [])
+        if fields not in rejected:
+            refused = {(k, v) for bundle in rejected for k, v in bundle.items()}
+            fields = {k: v for k, v in fields.items() if (k, v) not in refused}
 
         # The CRM keeps no field history, so what a change replaces is written to the note: the previous
         # owner and the previous name are exactly the ownership trail a re-parent or rename would erase.
@@ -542,5 +551,5 @@ class Planner:
                 "matches": matches, "unlisted": unlisted, "proposals": proposals}
 
 
-def build_plan(locations, accounts, contacts, parent_name, pins=None):
-    return Planner(accounts, contacts, parent_name, pins).build(locations)
+def build_plan(locations, accounts, contacts, parent_name, pins=None, declined=None):
+    return Planner(accounts, contacts, parent_name, pins, declined).build(locations)

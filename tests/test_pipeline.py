@@ -55,3 +55,17 @@ def test_rehearsal_applies_everything_to_a_copy_and_changes_nothing_real(locatio
     # the "live" CRM and the ledger are exactly as they were
     assert fake_crm.writes == [] and {a["account_id"]: a for a in fake_crm.list_accounts()} == before
     assert store.counts() == {"pending": 29}
+
+
+def test_the_pipeline_tells_the_planner_what_the_reviewer_has_already_declined(locations, fake_crm):
+    dayton = "0010KJFP601YNTZVDA"
+    store = Store(":memory:")
+    run_pipeline(store, crm=fake_crm, scrape_fn=scrape_returning(locations))
+    rename = next(p for p in store.list(("pending",)) if p["account_id"] == dayton)
+    store.decide(rename["id"], "rejected", "tester", only_if="pending")
+    fake_crm.accounts[dayton]["care_type"] = "Assisted Living"  # a second difference appears on the same account
+
+    summary = run_pipeline(store, crm=fake_crm, scrape_fn=scrape_returning(locations))
+    assert summary["proposals"]["new"] == 1
+    newest = store.list(("pending",))[-1]
+    assert newest["account_id"] == dayton and "name" not in newest["payload"]["fields"]  # only the care type
