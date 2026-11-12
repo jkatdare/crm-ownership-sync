@@ -11,15 +11,15 @@
 {% if done and done.status == 'applied' %}
 {% set r = done.result or {} %}
 <div class="flashes"><div class="flash ok">
-  <b>Approved #{{ done.id }} and written to the CRM:</b> {{ done.title }}
+  <b>Approved #{{ done.id }} and written to the {{ 'demo copy' if demo else 'CRM' }}:</b> {{ done.title }}
   ({% if r.noop %}{{ r.noop }} - nothing to write{% else %}{{ r.writes|length }} API write(s), read back and verified{% endif %}).
   {% for key in ['updated', 'preserved', 'created', 'reused', 'account_id'] %}{% if r[key] %}
-    <a href="{{ crm_url(r[key]) }}" target="_blank" rel="noopener">Open {{ r[key] }} in the CRM{% if key == 'created' %} (new account){% endif %}</a>
+    <a href="{{ crm_url(r[key]) }}" target="_blank" rel="noopener">Open {{ r[key] }} in the {{ 'demo copy' if demo else 'CRM' }}{% if key == 'created' %} (new account){% endif %}</a>
   {% endif %}{% endfor %}
 </div></div>
 {% endif %}
 {% if tab == 'pending' %}
-  <p class="summary">{{ proposals|length }} proposal(s) awaiting a decision. Nothing is written to the CRM until you approve it here.
+  <p class="summary">{{ proposals|length }} proposal(s) awaiting a decision. Nothing is written to the {{ 'demo copy' if demo else 'CRM' }} until you approve it here.
     A rejected proposal is remembered and never proposed again.</p>
 {% else %}
   <p class="summary">{{ proposals|length }} {{ tab }} proposal(s).</p>
@@ -131,7 +131,7 @@
       <input type="hidden" name="tab" value="{{ tab }}"><input type="hidden" name="anchor" value="{{ next_anchor }}">
       <input type="hidden" name="seen" value="{{ p.last_run_id }}">
       <input type="text" name="note" placeholder="Approval note (optional)">
-      <button class="approve">{{ 'Retry' if p.status != 'pending' else 'Approve' }} &amp; write to CRM</button>
+      <button class="approve">{{ 'Retry' if p.status != 'pending' else 'Approve' }} &amp; write to {{ 'demo copy' if demo else 'CRM' }}</button>
     </form>
     {% if p.status == 'pending' %}
     <form method="post" action="{{ url_for('reject', pid=p.id) }}">
