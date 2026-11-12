@@ -98,6 +98,13 @@ def create_app(db_path=None, crm_factory=None):
     def approve(pid):
         s = store()
         proposal = s.get(pid) or abort(404)
+        # The page says which run's version of the proposal the reviewer was looking at. If a run has
+        # refreshed it since, what would be written is no longer exactly what they saw.
+        seen = request.form.get("seen")
+        if seen is not None and seen != str(proposal["last_run_id"]):
+            flash(f"Proposal #{pid} was refreshed by a pipeline run after this page loaded. Nothing was written - "
+                  "please review it again.", "warn")
+            return back()
         try:
             crm = crm_factory()  # writable client: built only here, only for an explicit approval
         except Exception as exc:  # e.g. no token configured: say so instead of half-starting

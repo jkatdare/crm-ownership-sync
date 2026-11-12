@@ -149,8 +149,10 @@ When an approval is executed:
    CHOW finds the account it created earlier instead of creating a second one.
 2. **Drift**: the account's `updated_at` must equal what the reviewer saw. If someone changed the
    account in the meantime, nothing is written and the proposal is closed; the next run re-proposes
-   from fresh data.
-3. **SOP, again**: a parent change is refused if the live record now has revenue and open AR.
+   from fresh data. Likewise, if a pipeline run refreshed the proposal after the reviewer's page
+   loaded, the click is refused and they are asked to look again.
+3. **SOP, again**: a parent change, or deactivating a record as a duplicate, is refused if the
+   live record now has revenue and open AR.
 4. **Read-back**: after writing, the account is fetched and compared with what was intended. A new
    account whose POST ignored a field gets that field set explicitly, because accounts cannot be
    deleted and a half-filled one would stay forever.
@@ -169,9 +171,10 @@ then share one ledger and there is nothing to keep in sync:
 ```
 
 **As a GitHub Actions workflow** - [`.github/workflows/daily-sync.yml`](.github/workflows/daily-sync.yml)
-runs every day at 11:00 UTC with `CRM_API_TOKEN` as a repository secret. It runs the tests, runs the
-pipeline against the ledger committed in the repository, and writes the result to the run summary
-("N new proposals awaiting review"). It deliberately does not commit anything: the ledger has exactly
+runs every day at 11:00 UTC with `CRM_API_TOKEN` as a repository secret (without the secret it runs
+the tests and skips the sync with a notice). It runs the tests, runs the pipeline against the ledger
+committed in the repository, and writes the result to the run summary ("N new proposals awaiting
+review"). It deliberately does not commit anything: the ledger has exactly
 one writer, the review app. The reviewer presses **Run pipeline now** (same fingerprints, so the same
 proposals), decides, and pushes `data/state.db`.
 

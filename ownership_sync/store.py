@@ -120,8 +120,9 @@ class Store:
                         " payload_json=?, evidence_json=?, status='pending', result_json=NULL, last_run_id=? WHERE id=?",
                         content + (run_id, row["id"]))
                     counts["still_pending" if row["status"] == "pending" else "reopened"] += 1
-            # Pending proposals this run no longer produces are closed: the CRM or the website moved on.
-            for row in self.db.execute("SELECT id, fingerprint FROM proposals WHERE status = 'pending'").fetchall():
+            # Proposals this run no longer produces are closed: the CRM or the website moved on. That
+            # includes an approval that failed - its Retry must not outlive the reason for the change.
+            for row in self.db.execute("SELECT id, fingerprint FROM proposals WHERE status IN ('pending', 'failed')").fetchall():
                 if row["fingerprint"] not in seen:
                     self.db.execute("UPDATE proposals SET status = 'obsolete', result_json = ? WHERE id = ?",
                                     (json.dumps({"closed": f"no longer proposed as of run {run_id}"}), row["id"]))

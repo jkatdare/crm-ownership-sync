@@ -68,3 +68,18 @@ def test_a_proposal_can_only_be_claimed_once(locations, fake_crm):
     assert store.claim(first) is True
     assert store.claim(first) is False  # the double click
     assert store.decide(first, "rejected", "tester", only_if="pending") is False  # too late to reject
+
+
+def test_failed_approval_expires_when_a_later_run_no_longer_needs_it(locations, fake_crm):
+    store = Store(":memory:")
+    proposals = plan(locations, fake_crm)["proposals"]
+    store.sync_proposals(store.start_run(), proposals)
+    first = store.list(("pending",))[0]
+    store.claim(first["id"])
+    store.decide(first["id"], "failed", "tester", result={"error": "CRM outage"})  # approved, but the write failed
+
+    still_needed = store.sync_proposals(store.start_run(), proposals)
+    assert store.get(first["id"])["status"] == "failed" and still_needed["auto_closed"] == 0  # Retry stays available
+
+    gone = store.sync_proposals(store.start_run(), [p for p in proposals if p["fingerprint"] != first["fingerprint"]])
+    assert gone["auto_closed"] == 1 and store.get(first["id"])["status"] == "obsolete"  # no stale Retry left behind

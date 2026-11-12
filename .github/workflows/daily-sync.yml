@@ -19,6 +19,8 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      HAS_TOKEN: ${{ secrets.CRM_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,9 +38,14 @@ jobs:
       # data/state.db in the repository is the ledger of decisions, committed by the reviewer after a
       # review session (the review app is its only writer). The run reads it, so anything already
       # approved or rejected is not proposed again; "new" in the summary is what is waiting for review.
-      # The job exits non-zero, proposing nothing, if the scrape looks incomplete or the CRM is unreachable.
+      # The step exits non-zero, proposing nothing, if the scrape looks incomplete or the CRM is unreachable.
       - name: Scrape, match, report
+        if: env.HAS_TOKEN == 'true'
         shell: bash               # bash here means -eo pipefail, so a failed run fails the job
         env:
           CRM_API_TOKEN: ${{ secrets.CRM_API_TOKEN }}
         run: python -m ownership_sync run | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Sync skipped (no token configured)
+        if: env.HAS_TOKEN != 'true'
+        run: echo "::notice::CRM_API_TOKEN is not set as a repository secret, so only the tests ran. Add it under Settings > Secrets and variables > Actions to make the daily sync live."

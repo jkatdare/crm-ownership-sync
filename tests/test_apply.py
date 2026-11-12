@@ -136,3 +136,20 @@ def test_note_only_proposal_is_written_once_and_the_po_box_survives(fake_crm, pr
     assert after["billing_street"] == "PO Box 517" and "3156 W Prospect Rd" in after["note"]
     assert "noop" in apply_proposal(fake_crm, proposals[ashtabula])  # a retry does not append the note again
     assert len(fake_crm.writes) == 1
+
+
+def test_duplicate_mark_is_refused_if_the_record_gained_revenue_and_open_ar(fake_crm, proposals):
+    loser = "001JD2MWRA74LTSN24"  # Harborview Nursing & Rehab of Port Clinton, 0 / 0 when it was proposed
+    fake_crm.accounts[loser].update(lifetime_revenue=40000, outstanding_ar=2500)  # billing posted since
+    with pytest.raises(StaleProposal, match="preserved"):
+        apply_proposal(fake_crm, proposals[loser])
+    assert fake_crm.writes == [] and fake_crm.get_account(loser)["status"] == "Active"
+
+
+def test_a_retired_record_at_the_address_does_not_block_creating_the_current_account(fake_crm, proposals):
+    # A CHOW predecessor that stays under the parent must not be mistaken for the facility's current account.
+    new = proposals["bellhaven-of-batavia"]["payload"]["new_account"]
+    fake_crm.create_account({**new, "name": "Old Batavia record", "chow_current_account": "001SOMEWHEREELSE"})
+    fake_crm.writes.clear()
+    result = apply_proposal(fake_crm, proposals["bellhaven-of-batavia"])
+    assert "created" in result and [w["method"] for w in fake_crm.writes] == ["POST"]

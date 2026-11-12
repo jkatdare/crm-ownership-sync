@@ -129,6 +129,7 @@
     <form method="post" action="{{ url_for('approve', pid=p.id) }}" onsubmit="this.querySelector('button').disabled = true">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="tab" value="{{ tab }}"><input type="hidden" name="anchor" value="{{ next_anchor }}">
+      <input type="hidden" name="seen" value="{{ p.last_run_id }}">
       <input type="text" name="note" placeholder="Approval note (optional)">
       <button class="approve">{{ 'Retry' if p.status != 'pending' else 'Approve' }} &amp; write to CRM</button>
     </form>

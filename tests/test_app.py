@@ -173,3 +173,19 @@ def test_queue_survives_an_unknown_category_and_shows_request_bodies_verbatim(cl
     assert response.status_code == 200 and "something_new" in page
     # request bodies are shown as they are sent, not as JSON unicode escapes (u0026 for the ampersand, u003c for <)
     assert "Rehabilitation &amp; Nursing of Grove City" in page and "u0026" not in page and "u003c" not in page
+
+
+def test_approving_from_a_page_that_a_later_run_has_refreshed_writes_nothing(client, fake_crm, locations):
+    pid = proposal_id(client, LIMA)
+    page_version = Store(client.db).get(pid)["last_run_id"]  # what the open page carries in its form
+    store = Store(client.db)  # a scheduled run refreshes the pending proposal in the background
+    store.sync_proposals(store.start_run(), build_plan(locations, fake_crm.list_accounts(), fake_crm.list_contacts(), PARENT_NAME)["proposals"])
+    store.close()
+
+    stale = client.post(f"/proposals/{pid}/approve", data={"csrf": client.csrf, "seen": page_version}, follow_redirects=True)
+    assert "review it again" in stale.get_data(as_text=True)
+    assert fake_crm.writes == [] and status_of(client, pid) == "pending"
+
+    fresh = Store(client.db).get(pid)["last_run_id"]
+    client.post(f"/proposals/{pid}/approve", data={"csrf": client.csrf, "seen": fresh})
+    assert status_of(client, pid) == "applied" and len(fake_crm.writes) == 1

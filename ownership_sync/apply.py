@@ -62,9 +62,13 @@ def _verify(crm, account_id, fields):
 
 
 def _find_at_address(crm, new):
-    """An existing live account under the same parent at the same address (so we never create a second)."""
+    """An existing live account under the same parent at the same address (so we never create a second).
+
+    Records already retired as a duplicate or as a CHOW predecessor do not count: they are not the
+    facility's current account.
+    """
     for a in crm.list_accounts(parent_id=new["parent_id"], zip=new["billing_zip"]):
-        if (a["parent_id"] == new["parent_id"] and not a["duplicate_of_account"]
+        if (a["parent_id"] == new["parent_id"] and not a["duplicate_of_account"] and not a["chow_current_account"]
                 and norm_street(a["billing_street"]) == norm_street(new["billing_street"])):
             return a
     return None
@@ -113,6 +117,9 @@ def _apply_patch(crm, payload):
         if "parent_id" in fields and must_preserve(account):
             raise SopViolation(f"{account['name']} has revenue history and outstanding AR - its parent must not change (CHOW SOP)")
         if fields.get("duplicate_of_account"):
+            if must_preserve(account):  # it gained revenue + open AR since it was proposed
+                raise StaleProposal(f"{account['name']} now has revenue history and outstanding AR - billing needs it "
+                                    "preserved, so it must not be deactivated as a duplicate")
             survivor = crm.get_account(fields["duplicate_of_account"])
             if survivor["duplicate_of_account"] or survivor["account_id"] == account["account_id"]:
                 raise StaleProposal("the surviving record is itself marked as a duplicate")
