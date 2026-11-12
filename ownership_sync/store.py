@@ -92,44 +92,76 @@ class Store:
 
     # ---------------------------------------------------------------- proposals
     def sync_proposals(self, run_id, proposals):
-        """Record this run's proposals without ever re-proposing something already decided."""
+        """Record this run's proposals without ever re-proposing something already decided.
+
+        A decision holds for as long as the situation it was made about persists. What a run does
+        with a proposal the ledger already knows:
+          pending / obsolete -> refreshed and (re)queued
+          rejected / failed  -> stays as it is; only its content is kept current, so that a Reopen or
+                                a Retry acts on today's data
+          applied            -> stays applied, and is reported if the CRM still differs. The one
+                                exception: a successful run in between did NOT propose it, so the
+                                fix was in place and has since been undone - a new event, queued again
+          applying           -> left alone (an approval is writing it right now)
+        """
         counts = {"new": 0, "still_pending": 0, "already_decided": 0, "reopened": 0, "auto_closed": 0}
-        reappeared, seen = [], set()
+        still_differs, undone, rejected_back, seen = [], [], [], set()
+        refresh = ("UPDATE proposals SET kind=?, category=?, title=?, confidence=?, account_id=?, location_slug=?,"
+                   " payload_json=?, evidence_json=?")
         with self.db:
+            # Take the write lock before reading anything. A decision made while a run is syncing then
+            # waits for the sync (and the sync for it) instead of being overwritten by a stale read.
+            self.db.execute("BEGIN IMMEDIATE")
+            previous_ok = self.db.execute("SELECT MAX(id) FROM runs WHERE status = 'ok' AND id < ?", (run_id,)).fetchone()[0]
             for p in proposals:
                 seen.add(p["fingerprint"])
-                row = self.db.execute("SELECT id, status FROM proposals WHERE fingerprint = ?", (p["fingerprint"],)).fetchone()
+                row = self.db.execute("SELECT id, status, last_run_id FROM proposals WHERE fingerprint = ?",
+                                      (p["fingerprint"],)).fetchone()
                 content = (p["kind"], p["category"], p["title"], p["confidence"], p["account_id"], p["location_slug"],
                            json.dumps(p["payload"]), json.dumps(p["evidence"]))
+                # Not proposed by the last successful run, proposed again now: it went away and came back.
+                came_back = bool(row) and previous_ok is not None and (row["last_run_id"] or 0) < previous_ok
                 if row is None:
                     self.db.execute(
                         "INSERT INTO proposals (kind, category, title, confidence, account_id, location_slug, payload_json,"
                         " evidence_json, fingerprint, first_run_id, last_run_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         content + (p["fingerprint"], run_id, run_id, now()))
                     counts["new"] += 1
-                elif row["status"] in DECIDED:
-                    # Approved or rejected before: remember we saw it, but do NOT put it back in the queue.
-                    self.db.execute("UPDATE proposals SET last_run_id = ? WHERE id = ?", (run_id, row["id"]))
+                elif row["status"] in ("pending", "obsolete") or (row["status"] == "applied" and came_back):
+                    # Undecided, auto-closed and relevant again, or applied once and since undone: (re)queue it.
+                    self.db.execute(refresh + ", status='pending', result_json=NULL, last_run_id=? WHERE id=?",
+                                    content + (run_id, row["id"]))
+                    counts["still_pending" if row["status"] == "pending" else "reopened"] += 1
+                    if row["status"] == "applied":
+                        undone.append(p["title"])
+                else:
+                    # Approved, rejected, failed or in flight: a human has dealt with it. NOT back in the queue.
+                    if row["status"] in ("rejected", "failed"):
+                        self.db.execute(refresh + ", last_run_id=? WHERE id=?", content + (run_id, row["id"]))
+                    else:
+                        self.db.execute("UPDATE proposals SET last_run_id = ? WHERE id = ?", (run_id, row["id"]))
                     counts["already_decided"] += 1
                     if row["status"] == "applied":
-                        reappeared.append(p["title"])  # applied, yet the CRM still differs: worth a human look
-                else:
-                    # Still undecided (or auto-closed earlier and now relevant again): refresh its evidence.
-                    self.db.execute(
-                        "UPDATE proposals SET kind=?, category=?, title=?, confidence=?, account_id=?, location_slug=?,"
-                        " payload_json=?, evidence_json=?, status='pending', result_json=NULL, last_run_id=? WHERE id=?",
-                        content + (run_id, row["id"]))
-                    counts["still_pending" if row["status"] == "pending" else "reopened"] += 1
+                        still_differs.append(p["title"])  # applied, yet the CRM still differs: worth a human look
+                    if row["status"] == "rejected" and came_back:
+                        rejected_back.append(p["title"])  # stays rejected, but say so: it may be a new event
             # Proposals this run no longer produces are closed: the CRM or the website moved on. That
             # includes an approval that failed - its Retry must not outlive the reason for the change.
-            for row in self.db.execute("SELECT id, fingerprint FROM proposals WHERE status IN ('pending', 'failed')").fetchall():
+            open_rows = self.db.execute(
+                "SELECT id, fingerprint, status, result_json FROM proposals WHERE status IN ('pending', 'failed')").fetchall()
+            for row in open_rows:
                 if row["fingerprint"] not in seen:
+                    closed = {"closed": f"no longer proposed as of run {run_id}"}
+                    if row["status"] == "failed" and row["result_json"]:
+                        closed["failed_attempt"] = json.loads(row["result_json"])  # keep what that approval did
                     self.db.execute("UPDATE proposals SET status = 'obsolete', result_json = ? WHERE id = ?",
-                                    (json.dumps({"closed": f"no longer proposed as of run {run_id}"}), row["id"]))
+                                    (json.dumps(closed), row["id"]))
                     counts["auto_closed"] += 1
         counts["pending_total"] = self.counts().get("pending", 0)
-        if reappeared:
-            counts["applied_but_still_differs"] = reappeared
+        for key, titles in (("applied_but_still_differs", still_differs), ("applied_then_undone", undone),
+                            ("rejected_and_back", rejected_back)):
+            if titles:
+                counts[key] = titles
         return counts
 
     def get(self, proposal_id):
@@ -153,10 +185,17 @@ class Store:
 
     def recover_interrupted(self):
         """Run once when the review app starts. Nothing can be mid-flight at that moment, so a row
-        still marked 'applying' is left over from a crash; make it retryable (retrying is idempotent)."""
+        still marked 'applying' is left over from a crash; make it retryable (retrying is idempotent)
+        and say so in the audit log, because the interrupted approval may already have written."""
+        result = {"error": "interrupted before the outcome was recorded - Retry is safe"}
         with self.db:
-            self.db.execute("UPDATE proposals SET status = 'failed', result_json = ? WHERE status = 'applying'",
-                            (json.dumps({"error": "interrupted before the outcome was recorded - Retry is safe"}),))
+            for row in self.db.execute("SELECT id FROM proposals WHERE status = 'applying'").fetchall():
+                self.db.execute("UPDATE proposals SET status = 'failed', result_json = ? WHERE id = ?",
+                                (json.dumps(result), row["id"]))
+                self.db.execute("INSERT INTO audit (at, proposal_id, event, detail_json) VALUES (?,?,?,?)",
+                                (now(), row["id"], "failed", json.dumps({
+                                    "by": "system", "note": "approval interrupted; whether it reached the CRM is unknown",
+                                    "result": result})))
 
     def decide(self, proposal_id, status, by, note="", result=None, only_if=None):
         """Record a decision. With only_if, it applies only while the proposal is still in that status."""

@@ -218,9 +218,20 @@ proposals), decides, and pushes `data/state.db`.
 Two independent mechanisms:
 
 1. **The ledger.** Each proposal has a fingerprint derived from *what it would change* (account,
-   fields and values - not wording, dates or evidence). `store.sync_proposals()` inserts unseen
-   fingerprints, refreshes ones that are still pending, and leaves approved or rejected ones alone.
-   A pending proposal that is no longer produced is closed automatically.
+   fields and values, a new account's normalised name and address - not wording, dates, evidence,
+   page URLs or street spelling). `store.sync_proposals()` inserts unseen fingerprints, refreshes
+   ones that are still pending, and leaves approved or rejected ones alone. A pending proposal that
+   is no longer produced is closed automatically. The sync takes the database write lock before it
+   reads, so a decision made while a run is in progress is never overwritten.
+
+   A decision holds for as long as the situation it was made about persists:
+   - a **rejected** proposal stays rejected, even if it disappears for a while and comes back (the
+     run then says so, in case it is a new event worth reopening);
+   - an **applied** proposal that is still produced on the next run is reported ("applied, but the
+     CRM still differs") rather than queued again;
+   - an applied proposal that went away - the fix was in place - and is produced again later means
+     someone undid the fix in the CRM. That is a new event, so it is queued again, with the earlier
+     approval kept in the audit log.
 2. **Convergence.** Records resolved by an earlier approval (marked duplicate, CHOW-linked, flagged)
    are recognised and left alone, so an approved change does not come back as a new diff.
    `tests/test_reruns.py` approves the whole queue against a fake CRM and asserts that the next run

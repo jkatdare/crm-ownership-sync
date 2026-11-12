@@ -311,3 +311,36 @@ def test_unparented_facility_with_child_accounts_is_matched_not_recreated():
     plan = plan_for([LOC], [PARENT, OTHER, campus, wing], [])
     assert match(plan, LOC.slug)["account_id"] == "A1"
     assert [p["kind"] for p in plan["proposals"]] == ["patch"]  # re-parent and rename it; never a second account
+
+
+# ----------------------------------------------------------------- proposal identity (fingerprints)
+def test_fingerprints_of_field_changes_are_the_ones_already_stored_in_ledgers(locations, seed_accounts, seed_contacts):
+    proposals = by_account(plan_for(locations, seed_accounts, seed_contacts))
+    assert proposals["001LGFPBJY4N9MB6KL"]["fingerprint"] == "8e9a7f46ec1805e1"  # re-parent Lima
+    assert proposals["001CF3LDWVRGL09P4F"]["fingerprint"] == "f2955120e57f4aed"  # Portsmouth zip
+    assert proposals["001QU150PM4Z15UA71"]["fingerprint"] == "8d286b9b60b9cc8c"  # second Owosso record -> duplicate
+    assert proposals["001SXSF4ELF0Z2LGDM"]["fingerprint"] == "660defc1aab92832"  # Sandusky CHOW link
+
+
+def test_a_new_account_is_identified_by_what_and_where_it_is_not_by_url_or_spelling():
+    def create_for(**changes):
+        loc = Location(**{**LOC.__dict__, **changes})
+        (p,) = plan_for([loc], [PARENT, OTHER], [])["proposals"]
+        assert p["kind"] == "create"
+        return p["fingerprint"]
+
+    original = create_for()
+    assert create_for(slug="testville-new-url", url="https://x/communities/testville-new-url") == original
+    assert create_for(street="10 Oak St.") == original and create_for(phone="(555) 999-0000", administrator="New Admin") == original
+    assert create_for(name="Bellhaven Gardens of Testville") != original  # a different community is a different proposal
+    assert create_for(street="12 Oak Street") != original
+
+
+def test_a_note_only_proposal_is_identified_by_what_it_annotates():
+    po_box = account("A1", "Bellhaven of Testville", "P1", parent_name=PARENT_NAME, billing_street="PO Box 9",
+                     billing_city="Testville", billing_state="OH", billing_zip="44000", phone="(555) 010-0001")
+    (p,) = plan_for([LOC], [PARENT, po_box], [])["proposals"]
+    assert set(p["payload"]["fields"]) == {"note"} and p["payload"]["annotation"] == "physical_address:10 oak st:44000"
+    reworded = {**p, "payload": {**p["payload"], "fields": {"note": "Same address, said differently."}}}
+    from ownership_sync.matcher import fingerprint
+    assert fingerprint(reworded) == p["fingerprint"]

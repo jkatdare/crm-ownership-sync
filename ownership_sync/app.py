@@ -157,8 +157,14 @@ def create_app(db_path=None, crm_factory=None, demo_crm=None):
             c = summary["proposals"]
             flash(f"Pipeline run finished: {c['new']} new proposal(s), {c['still_pending']} still pending, "
                   f"{c['already_decided']} already decided and not re-proposed, {c['auto_closed']} auto-closed.", "ok")
-            for warning in summary["scrape"]["warnings"] + c.get("applied_but_still_differs", []):
-                flash(f"Check: {warning}", "warn")
+            for warning in summary["scrape"]["warnings"]:
+                flash(f"Check the scrape: {warning}", "warn")
+            for title in c.get("applied_but_still_differs", []):
+                flash(f"Applied earlier, but the CRM still differs: {title}", "warn")
+            for title in c.get("applied_then_undone", []):
+                flash(f"Applied earlier and undone in the CRM since, so it is queued again: {title}", "warn")
+            for title in c.get("rejected_and_back", []):
+                flash(f"Rejected earlier, went away and is back (still rejected - reopen it if this is new): {title}", "warn")
         return redirect(url_for("queue"))
 
     @app.get("/matches")

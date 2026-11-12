@@ -83,19 +83,24 @@ def fingerprint(proposal):
     """Stable identity of a proposal: what it would change, not how it is worded.
 
     The ledger uses this to recognise a proposal it has already seen, so an approved or rejected
-    item is never proposed again. Notes are excluded so that rewording never reopens a decision
-    (unless the note is the whole change, as with a physical-address annotation).
+    item is never proposed again. It is built only from substance in canonical form: notes are
+    excluded, so rewording never reopens a decision, and a new account is keyed on its normalised
+    name and address, so neither a changed page URL nor "Dr" becoming "Drive" does either.
     """
     payload = proposal["payload"]
     new = payload.get("new_account")
-    fields = payload.get("fields", {})
+    fields = {k: v for k, v in sorted(payload.get("fields", {}).items()) if k != "note"}
+    if proposal["kind"] == "patch" and not fields:
+        # A note-only change is identified by what it annotates, not by the wording of the sentence.
+        fields = {"annotation": payload.get("annotation") or payload["fields"].get("note")}
     core = {
         "kind": proposal["kind"],
         "account_id": proposal["account_id"],
-        "location": proposal["location_slug"] if proposal["kind"] == "create" else None,
-        "fields": {k: v for k, v in sorted(fields.items()) if k != "note"} or dict(fields),
+        "location": None,  # no longer part of the identity; kept so field-change fingerprints stay as they were
+        "fields": fields,
         "link_to": payload.get("link_to"),
-        "new": {k: new[k] for k in ("name", "parent_id", "billing_street", "billing_zip")} if new else None,
+        "new": {"name": norm_text(new["name"]), "parent_id": new["parent_id"],
+                "street": norm_street(new["billing_street"]), "zip": new["billing_zip"]} if new else None,
     }
     return hashlib.sha256(json.dumps(core, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -154,8 +159,8 @@ class Planner:
         p["fingerprint"] = fingerprint(p)
         return p
 
-    def patch(self, category, title, reason, account, fields, **kw):
-        """A proposal that PATCHes fields on one existing account."""
+    def patch(self, category, title, reason, account, fields, annotation=None, **kw):
+        """A proposal that PATCHes fields on one existing account. `annotation` names what a note-only patch is about."""
         diff = []
         for key, value in fields.items():
             is_link = key in ("parent_id", "duplicate_of_account")
@@ -165,6 +170,8 @@ class Planner:
                 "after": self.label(value) if is_link else value,
             })
         payload = {"account_id": account["account_id"], "expect_updated_at": account["updated_at"], "fields": fields}
+        if annotation:
+            payload["annotation"] = annotation
         # The API has no merge, so marking a record as a duplicate also carries its contacts over to
         # the surviving record - otherwise they would be stranded on an inactive account.
         contacts = self.contacts_of[account["account_id"]] if fields.get("duplicate_of_account") else []
@@ -359,8 +366,9 @@ class Planner:
             bullets.append(f"{len(rest) + 1} CRM records match this location. This one is kept because {why}.")
         others = [{"role": "other record for this facility (separate proposal)", "account": snapshot(c["account"])} for c in rest]
         solid = top["basis"] == "address" or (s["phone"] and s["administrator"])
-        return self.patch(category, title, reason, a, fields, loc=loc, signals=s, bullets=bullets, sop=sop,
-                          others=others, confidence="high" if solid and not ambiguous else "medium")
+        annotation = f"physical_address:{norm_street(loc.street)}:{loc.zip}" if annotation_only else None
+        return self.patch(category, title, reason, a, fields, annotation=annotation, loc=loc, signals=s, bullets=bullets,
+                          sop=sop, others=others, confidence="high" if solid and not ambiguous else "medium")
 
     def loser(self, loc, cand, top, why, ambiguous):
         """A second record for a facility that already has a surviving record. None = nothing to propose this run."""

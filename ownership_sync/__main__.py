@@ -96,6 +96,10 @@ def main(argv=None):
               f"{proposals['auto_closed']} auto-closed. Awaiting review: {proposals['pending_total']}.")
         for title in proposals.get("applied_but_still_differs", []):
             print(f"  WARNING: applied earlier but the CRM still differs: {title}")
+        for title in proposals.get("applied_then_undone", []):
+            print(f"  NOTE: applied earlier, undone in the CRM since, so it is queued again: {title}")
+        for title in proposals.get("rejected_and_back", []):
+            print(f"  NOTE: rejected earlier, went away and is back (still rejected; reopen it if this is new): {title}")
     return 0
 
 
