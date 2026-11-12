@@ -2,7 +2,8 @@
 from collections import Counter
 
 from . import config
-from .crm import CrmClient
+from .apply import apply_proposal
+from .crm import CrmClient, InMemoryCrm
 from .matcher import build_plan
 from .scraper import ScrapeError, scrape
 
@@ -43,3 +44,32 @@ def run_pipeline(store, crm=None, scrape_fn=scrape):
     except Exception as exc:
         store.finish_run(run_id, "error", error=f"{type(exc).__name__}: {exc}")
         raise
+
+
+def rehearse(store, live_crm=None, scrape_fn=scrape):
+    """Dry-run every pending approval against a private copy of the LIVE CRM. Writes nothing anywhere.
+
+    Each proposal goes through the real executor and all of its guards, on the records exactly as
+    they are in the CRM right now; the writes land in the copy. The matcher is then run on the copy
+    to show what the next daily run would propose once everything has been approved.
+    """
+    live_crm = live_crm or CrmClient(config.API_URL, config.API_TOKEN, read_only=True)
+    rehearsal = InMemoryCrm(live_crm.list_accounts(), live_crm.list_contacts())
+    live_accounts = len(rehearsal.accounts)
+    results = []
+    for proposal in store.list(("pending", "failed")):
+        first_call = len(rehearsal.writes)
+        try:
+            apply_proposal(rehearsal, proposal)
+            results.append({"id": proposal["id"], "title": proposal["title"], "ok": True,
+                            "calls": rehearsal.writes[first_call:]})
+        except Exception as exc:
+            results.append({"id": proposal["id"], "title": proposal["title"], "ok": False,
+                            "error": f"{type(exc).__name__}: {exc}"})
+    locations, _stats = scrape_fn(config.BASE_URL)
+    after = build_plan(locations, rehearsal.list_accounts(), rehearsal.list_contacts(), config.TARGET_PARENT_NAME,
+                       config.load_overrides().get("survivor_pins"))
+    return {"accounts": live_accounts,
+            "results": results,
+            "remaining": [p["title"] for p in after["proposals"]],
+            "classification": dict(Counter(m["classification"] for m in after["matches"]))}

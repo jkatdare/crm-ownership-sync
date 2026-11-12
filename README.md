@@ -44,6 +44,7 @@ Then open http://127.0.0.1:5000 and review the queue.
 | Command | What it does |
 |---|---|
 | `python -m ownership_sync run` | The daily job: scrape, read the CRM, match, record proposals. Read-only against the CRM. |
+| `python -m ownership_sync rehearse` | Dry-runs every pending approval on a private copy of the live CRM. Writes nothing. |
 | `python -m ownership_sync serve` | The review app. Approve / reject; approvals write to the CRM. |
 | `python -m ownership_sync scrape` | Just the scraper: prints every location as JSON, with self-check stats. |
 | `python -m ownership_sync report` | Every proposal and its decision as a Markdown table. |
@@ -158,6 +159,27 @@ When an approval is executed:
 4. **Read-back**: after writing, the account is fetched and compared with what was intended. A new
    account whose POST ignored a field gets that field set explicitly, because accounts cannot be
    deleted and a half-filled one would stay forever.
+
+## Testing it against the real CRM
+
+The pipeline and the review app always work on the real CRM: `run` reads it, and Approve writes to
+it. Only the automated test suite uses an in-memory stand-in, because the sandbox has no delete and
+no reset - a test that created accounts there would leave them behind for good.
+
+Three ways to test on real data, from safest to most conclusive:
+
+1. **Read path** - `python -m ownership_sync run`. Scrapes the live site, reads the live CRM, and
+   prints what it found. Every proposal card links to the account in the CRM browser.
+2. **Rehearsal** - `python -m ownership_sync rehearse`. Copies the live CRM into memory and sends
+   every pending approval through the real executor and all of its guards (drift, SOP,
+   idempotency, read-back) against that copy, then runs the matcher on the result. It reports,
+   per proposal, the calls it would send or the reason it would be refused, and what the next run
+   would propose once everything was approved (the goal is nothing). The CRM and the ledger are
+   not touched.
+3. **A real approval** - approve one proposal in the app. The app writes to the CRM, reads the
+   account back to verify it, and links to it in the CRM browser. This is the only step that proves
+   how the real API answers a write, so start with a small reversible one (a zip or name fix) before
+   the creates, which cannot be undone.
 
 ## Running it daily
 

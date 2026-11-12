@@ -39,3 +39,19 @@ def test_sharp_drop_needs_a_human_to_acknowledge_it(locations, fake_crm, monkeyp
 
     monkeypatch.setattr(config, "MIN_SCRAPE_RATIO", 0.0)  # the operator confirms the drop is real
     assert run_pipeline(store, crm=fake_crm, scrape_fn=shrunk)["scrape"]["communities_found"] == 20
+
+
+def test_rehearsal_applies_everything_to_a_copy_and_changes_nothing_real(locations, fake_crm):
+    from ownership_sync.pipeline import rehearse
+
+    store = Store(":memory:")
+    run_pipeline(store, crm=fake_crm, scrape_fn=scrape_returning(locations))
+    before = {a["account_id"]: a for a in fake_crm.list_accounts()}
+
+    report = rehearse(store, live_crm=fake_crm, scrape_fn=scrape_returning(locations))
+
+    assert len(report["results"]) == 29 and all(r["ok"] for r in report["results"])
+    assert report["remaining"] == [] and report["classification"] == {"confident_match": 35}
+    # the "live" CRM and the ledger are exactly as they were
+    assert fake_crm.writes == [] and {a["account_id"]: a for a in fake_crm.list_accounts()} == before
+    assert store.counts() == {"pending": 29}

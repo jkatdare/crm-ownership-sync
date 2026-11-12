@@ -1,6 +1,7 @@
 """Command line entry point.
 
     python -m ownership_sync run      # the daily job: scrape + match + record proposals (CRM read-only)
+    python -m ownership_sync rehearse # dry-run every pending approval on a copy of the live CRM; writes nothing
     python -m ownership_sync serve    # the local review app (approve / reject)
     python -m ownership_sync scrape   # just print the scraped locations as JSON
     python -m ownership_sync report   # every proposal and its decision, as a Markdown table
@@ -11,7 +12,7 @@ import sys
 from dataclasses import asdict
 
 from . import config
-from .pipeline import run_pipeline
+from .pipeline import rehearse, run_pipeline
 from .scraper import scrape
 from .store import Store
 
@@ -27,6 +28,7 @@ def main(argv=None):
     serve.add_argument("--port", type=int, default=5000)
     commands.add_parser("scrape", help="print the scraped locations as JSON")
     commands.add_parser("report", help="print every proposal and its decision as Markdown")
+    commands.add_parser("rehearse", help="dry-run every pending approval against a copy of the live CRM; writes nothing")
     args = parser.parse_args(argv)
 
     if args.command == "scrape":
@@ -39,6 +41,30 @@ def main(argv=None):
         for p in store.list(("pending", "applying", "applied", "rejected", "failed", "obsolete")):
             print(f"| {p['id']} | {p['category']} | {p['title']} | {p['status']} | {p['decided_by'] or ''} | "
                   f"{p['decided_at'] or ''} | {p['decision_note'] or ''} |")
+    elif args.command == "rehearse":
+        report = rehearse(Store(config.DB_PATH))
+        results = report["results"]
+        print(f"Rehearsing {len(results)} pending approval(s) on a private copy of the live CRM "
+              f"({report['accounts']} accounts read). Nothing is written to the CRM or to the ledger.")
+        print()
+        for r in results:
+            print(f"  {'OK  ' if r['ok'] else 'FAIL'}  #{r['id']:<3} {r['title']}")
+            if r["ok"]:
+                calls = ", ".join(f"{c['method']} {c['path']}" for c in r["calls"]) or "nothing to write (already in place)"
+                print(f"              would send: {calls}")
+            else:
+                print(f"              {r['error']}")
+        failed = [r for r in results if not r["ok"]]
+        calls = [c for r in results for c in r.get("calls", [])]
+        print()
+        print(f"{len(results) - len(failed)} of {len(results)} would apply cleanly "
+              f"({sum(c['method'] == 'POST' for c in calls)} POST, {sum(c['method'] == 'PATCH' for c in calls)} PATCH); "
+              f"{len(failed)} would be refused.")
+        print(f"After approving all of them, the next run would propose {len(report['remaining'])} change(s); locations: "
+              + ", ".join(f"{n} {k}" for k, n in sorted(report["classification"].items())) + ".")
+        for title in report["remaining"]:
+            print(f"  still proposed: {title}")
+        return 1 if failed else 0
     elif args.command == "serve":
         from .app import create_app
         print(f"Review app: http://127.0.0.1:{args.port}  (state: {config.DB_PATH})")
