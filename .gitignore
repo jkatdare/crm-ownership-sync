@@ -30,3 +30,6 @@ Thumbs.db
 
 # throwaway ledger of the demo mode
 data/demo.db
+
+# local helper for recording the demo video
+DEMO_SCRIPT.md
