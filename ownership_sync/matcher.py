@@ -19,7 +19,7 @@ import json
 from collections import defaultdict
 from dataclasses import asdict
 
-from .config import CARE_TYPE_MAP
+from .config import CARE_TYPE_MAP, COMPANY_SUFFIX
 from .normalize import is_po_box, name_similarity, norm_street, norm_text, phone_digits
 from .sop import must_preserve, sop_evidence
 
@@ -72,10 +72,11 @@ def owner_of(account):
 
 def same_site(a, b):
     """Two CRM accounts at the same physical address."""
-    street = norm_street(a["billing_street"])
+    street, zip_code, city = norm_street(a["billing_street"]), a["billing_zip"], norm_text(a["billing_city"])
     return (bool(street) and street == norm_street(b["billing_street"])
             and a["billing_state"] == b["billing_state"]
-            and (a["billing_zip"] == b["billing_zip"] or norm_text(a["billing_city"]) == norm_text(b["billing_city"])))
+            # blank never equals blank: two records with no zip are not thereby in the same place
+            and (bool(zip_code and zip_code == b["billing_zip"]) or bool(city and city == norm_text(b["billing_city"]))))
 
 
 def fingerprint(proposal):
@@ -112,11 +113,20 @@ class Planner:
         for c in contacts:
             if c.get("is_active", True):
                 self.contacts_of[c["account_id"]].append(c)
-        # Facility records only: a record with a street address is a facility, one without is a
-        # company (parent) record. Records already resolved by an earlier run (marked duplicate, or a
-        # CHOW predecessor) never take part in matching again - this is what lets re-runs converge.
-        self.facilities = [a for a in accounts if a["account_id"] != self.tid and (a["billing_street"] or "").strip()]
+        # Facility records only. A company record is labelled "(Parent Account)", or is one that other
+        # accounts hang off while having no parent of its own. A facility that happens to have child
+        # accounts still has a parent, so it stays a facility; so does one with a blank address.
+        has_children = {a["parent_id"] for a in accounts if a["parent_id"]}
+        self.facilities = [a for a in accounts if a["account_id"] != self.tid
+                           and not a["name"].rstrip().endswith(COMPANY_SUFFIX)
+                           and not (a["account_id"] in has_children and not a["parent_id"])]
+        # Records already resolved by an earlier run (marked duplicate, or a CHOW predecessor) never
+        # take part in matching again - this is what lets re-runs converge.
         self.live = [a for a in self.facilities if not a["duplicate_of_account"] and not a["chow_current_account"]]
+        # Records that resolved records already point at. They are never demoted, or an approved
+        # duplicate would end up pointing at a record that is itself a duplicate.
+        self.pointed_at = ({a["duplicate_of_account"] for a in accounts if a["duplicate_of_account"]}
+                           | {a["chow_current_account"] for a in accounts if a["chow_current_account"]})
 
     # ------------------------------------------------------------------ helpers
     def label(self, account_id):
@@ -209,6 +219,7 @@ class Planner:
         at_target = a["parent_id"] == self.tid
         movable = at_target or not must_preserve(a)
         return (
+            movable and a["account_id"] in self.pointed_at,  # approved duplicates / CHOW links already point at it
             movable and a["account_id"] == self.pins.get(loc.slug),  # reviewer override (overrides.json)
             at_target,  # already under the right parent
             movable,  # the SOP allows it to be re-parented
@@ -247,7 +258,7 @@ class Planner:
         fix = self.fix_survivor(loc, top, rest, ambiguous, why)
         if fix:
             proposals.append(fix)
-        proposals += [self.loser(loc, c, top, why, ambiguous) for c in rest]
+        proposals += [p for p in (self.loser(loc, c, top, why, ambiguous) for c in rest) if p]
         s = top["signals"]
         solid = top["basis"] == "address" or (s["phone"] and s["administrator"])
         confidence = "high" if solid and not ambiguous else "medium"
@@ -258,6 +269,8 @@ class Planner:
 
     def why_survivor(self, loc, top, ambiguous):
         a, s = top["account"], top["signals"]
+        if a["account_id"] in self.pointed_at:
+            return "records resolved earlier already point at it as their surviving account"
         if a["account_id"] == self.pins.get(loc.slug):
             return "it is pinned as the survivor in overrides.json"
         reasons = []
@@ -272,7 +285,8 @@ class Planner:
         if ambiguous:
             return ("NO EVIDENCE SEPARATES THESE RECORDS (no billing history, contacts or phone match on any of them), "
                     "so the choice is a tie-break: the record with no parent, else the lowest account id. "
-                    "To keep a different record, pin it in overrides.json and re-run")
+                    "To keep a different record, pin it in overrides.json and re-run before approving any "
+                    "proposal for this address")
         return " and ".join(reasons) or "it ranks highest on status, contacts and parent"
 
     def fix_survivor(self, loc, top, rest, ambiguous, why):
@@ -291,7 +305,7 @@ class Planner:
         care = [CARE_TYPE_MAP[o] for o in loc.care_offerings if o in CARE_TYPE_MAP]
         if care and a["care_type"] not in care:
             fields["care_type"] = care[0]
-        if a["status"] == "Inactive":
+        if a["status"] != "Active":  # Inactive, or flagged Needs Review while it was off the website
             fields["status"] = "Active"
 
         # The CRM keeps no field history, so what a change replaces is written to the note: the previous
@@ -348,18 +362,23 @@ class Planner:
                           others=others, confidence="high" if solid and not ambiguous else "medium")
 
     def loser(self, loc, cand, top, why, ambiguous):
-        """A second record for a facility that already has a surviving record."""
+        """A second record for a facility that already has a surviving record. None = nothing to propose this run."""
         a, survivor = cand["account"], top["account"]
         bullets = self.signal_bullets(loc, cand) + [f"Surviving record: {survivor['name']} ({survivor['account_id']}), kept because {why}."]
         others = [{"role": "surviving record", "account": snapshot(survivor)}]
         owner = owner_of(a)
         if must_preserve(a) and a["parent_id"] != self.tid:
-            # Previous owner's record with open AR: preserve it untouched, just point it at the current account.
+            # Previous owner's record with open AR: preserve it untouched, just point it at the current account -
+            # but only once that account really is under Bellhaven (if its re-parent is still pending, wait a run).
+            if survivor["parent_id"] != self.tid:
+                return None
             return self.chow_link(a, survivor, loc=loc, bullets=bullets, others=others, reason=(
                 f"This is the previous owner's record ({owner}) for a facility that now has a Bellhaven account. "
                 "It has revenue history AND outstanding AR, so per the SOP it is left exactly as it is and only "
                 "linked to the current account."))
         if must_preserve(a):
+            if a["status"] == "Needs Review":  # already flagged for billing on an earlier run
+                return None
             fields = {"status": "Needs Review", "note": (
                 f"Possible duplicate of {survivor['account_id']} ({loc.name}), but it has revenue history and open AR - "
                 "billing to confirm before it is deactivated.")}
@@ -373,14 +392,17 @@ class Planner:
             "note": f"Duplicate of {survivor['account_id']} ({loc.name}): same facility at {loc.street}, {loc.city}. "
                     f"Superseded record ({owner}).",
         }
-        reason = (f"{loc.name} at {loc.street} has more than one CRM record. This copy ({owner}) has "
-                  f"${a['lifetime_revenue'] or 0:,.0f} lifetime revenue and ${a['outstanding_ar'] or 0:,.0f} outstanding AR, "
-                  "so no billing history is lost by deactivating it. Per the CRM convention it is marked Inactive and "
-                  "pointed at the surviving record. Its parent is left unchanged; any contacts on it move to the survivor.")
+        has_revenue = (a["lifetime_revenue"] or 0) > 0
+        billing = ("has revenue history but no outstanding AR, so the SOP does not require preserving it; its history stays "
+                   "on this record, reachable through the duplicate link" if has_revenue
+                   else "has no revenue history and no outstanding AR, so no billing history is lost by deactivating it")
+        reason = (f"{loc.name} at {loc.street} has more than one CRM record. This copy ({owner}) {billing}. Per the CRM "
+                  "convention it is marked Inactive and pointed at the surviving record. Its parent is left unchanged; "
+                  "any contacts on it move to the survivor.")
         which = f"the second “{a['name']}” record ({a['account_id']})" if a["parent_id"] == survivor["parent_id"] else f"“{a['name']}” ({owner})"
         return self.patch("duplicate", f"Mark {which} as a duplicate of “{loc.name}”", reason, a, fields,
                           loc=loc, signals=cand["signals"], bullets=bullets, others=others, sop=sop_evidence(a),
-                          confidence="medium" if ambiguous else "high")
+                          confidence="medium" if ambiguous or has_revenue else "high")
 
     def chow_new(self, loc, top):
         a = top["account"]
@@ -438,20 +460,29 @@ class Planner:
             return {**row, "state": f"resolved - CHOW link to {self.label(a['chow_current_account'])}"}, None
         if a["duplicate_of_account"]:
             return {**row, "state": f"resolved - duplicate of {self.label(a['duplicate_of_account'])}"}, None
-        if a["status"] != "Active":
-            return {**row, "state": f"already flagged ({a['status']})"}, None
 
         sop = sop_evidence(a)
         successors = [b for b in self.live if b["account_id"] != a["account_id"] and b["parent_id"] != self.tid
                       and b["account_id"] not in claimed and same_site(a, b)]
+        # Already flagged on an earlier run and still no sign of a new owner: nothing more to propose.
+        # (If the new owner's record has appeared since, fall through and link to it.)
+        if a["status"] != "Active" and not successors:
+            return {**row, "state": f"already flagged ({a['status']})"}, None
         if successors:
-            b = sorted(successors, key=lambda b: (b["status"] != "Active", not b["parent_id"], b["account_id"]))[0]
+            successors.sort(key=lambda b: (b["status"] != "Active", not b["parent_id"], b["account_id"]))
+            b = successors[0]
             owner = owner_of(b)
-            others = [{"role": f"current account for this address ({owner})", "account": snapshot(b)}]
+            others = [{"role": f"current account for this address ({owner})" if x is b
+                       else f"another record at this address ({owner_of(x)})", "account": snapshot(x)} for x in successors]
             bullets = [f"Not found on the Bellhaven website (no listing at {a['billing_street']}, {a['billing_city']}).",
                        f"Another CRM account, “{b['name']}” under {owner}, has the same address - the facility changed hands."]
+            confidence = "high"
+            if len(successors) > 1:  # which of them is current is a judgment call, so say so
+                confidence = "medium"
+                bullets.append(f"{len(successors)} other records share this address. “{b['name']}” was picked by tie-break "
+                               "(Active, has a parent, lowest id) - check which one is really the current account.")
             if must_preserve(a):
-                p = self.chow_link(a, b, bullets=bullets, others=others, reason=(
+                p = self.chow_link(a, b, bullets=bullets, others=others, confidence=confidence, reason=(
                     f"No longer a Bellhaven community: the same address now belongs to “{b['name']}” under {owner}. "
                     "This account has revenue history AND outstanding AR, so per the SOP it is left exactly as it is. "
                     "The account under the correct parent already exists, so no new one is created - only "
@@ -463,7 +494,7 @@ class Planner:
                     f"No longer on the Bellhaven website, and the same address already has an account under {owner}. "
                     f"The SOP would allow re-parenting it, but that would just create a second {owner} record for the "
                     "same building, so this one is marked Inactive and pointed at the existing account."),
-                    a, fields, bullets=bullets, others=others, sop=sop)
+                    a, fields, bullets=bullets, others=others, sop=sop, confidence=confidence)
             return {**row, "state": "proposal"}, p
 
         fields = {"status": "Needs Review", "note": (

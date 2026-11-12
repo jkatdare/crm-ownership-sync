@@ -84,7 +84,10 @@ instead of deactivating it.
 one is under Cedar Trail, one under Harborview; none has revenue, AR, contacts or a matching phone.
 The tool picks the unparented record as the survivor (re-parent + rename), marks the other two as
 duplicates, flags all three proposals as ambiguous, says so in the note, and lets the reviewer pin
-a different survivor in `overrides.json`. **TODO: state which one I kept and why.**
+a different survivor in `overrides.json` before approving. The three independent reviewers and the
+judge all landed on the same tie-break; the judge's fallback, if I had wanted no guess at all, was
+Needs Review on all three, at the cost of leaving a listed community without a Bellhaven account.
+**TODO: state which one I kept and why.**
 
 **Notes as the ownership trail.** The CRM keeps no field history, so a re-parent or rename would
 erase exactly the history this exercise is about. Every change to an existing record therefore also
@@ -131,9 +134,11 @@ this section so it reflects my own direction and checks.**
   safety, write safety, scraper, app and CI), and a second agent tried to refute each finding. It
   found real problems that my tests had missed, which I fixed and covered with tests: an overlapping
   double click on Approve could execute a proposal twice and create two accounts; a partial scrape
-  that the scraper itself had flagged was still acted on; a transient outage on a secondary page was
-  treated as a dead link; and the scheduled workflow and the reviewer both wrote the ledger file.
-  **TODO: add anything from the remaining reviewers.**
+  that the scraper itself had flagged was still acted on; a stale "mark as duplicate" could deactivate
+  a record that had since gained revenue and open AR; pinning a new survivor after approving a
+  duplicate could leave one duplicate pointing at another; and the scheduled workflow and the
+  reviewer both wrote the ledger file. The write-safety reviewer also injected a failure at every
+  CRM call of every proposal and retried (500+ runs) to confirm nothing is ever written twice.
 - **Tests as the check on the AI.** The suite runs against an in-memory fake CRM seeded from the
   real sandbox data, including one test that approves the whole queue and asserts the next run
   proposes nothing and every location is a confident match.

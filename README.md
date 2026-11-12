@@ -96,7 +96,9 @@ other record for the same facility becomes its duplicate. The survivor is chosen
 already under Bellhaven > allowed to move under the SOP > Active > has billing history > website's
 administrator is a contact on it > phone matches > number of contacts > has no parent. When the top
 two are tied on everything but the last, weak criterion, the proposal is flagged **ambiguous**
-(medium confidence) and says so; the reviewer can pin a different survivor in `overrides.json`.
+(medium confidence) and says so; the reviewer can pin a different survivor in `overrides.json`
+(before approving anything for that address - once approved duplicates point at a record, it is
+never demoted, so no duplicate can end up pointing at another duplicate).
 
 | Finding | Proposal |
 |---|---|

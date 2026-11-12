@@ -26,6 +26,7 @@ DB_PATH = Path(os.environ.get("SYNC_DB_PATH", ROOT / "data" / "state.db"))
 # The operator whose website we scrape, and the CRM parent account its facilities belong under.
 TARGET_PARENT_NAME = os.environ.get("TARGET_PARENT_NAME", "Bellhaven Senior Living (Parent Account)")
 BRAND_WORDS = {"bellhaven"}  # ignored when comparing facility names
+COMPANY_SUFFIX = "(Parent Account)"  # how this CRM labels company (non-facility) records
 
 # Website "care offering" -> CRM care_type.
 CARE_TYPE_MAP = {

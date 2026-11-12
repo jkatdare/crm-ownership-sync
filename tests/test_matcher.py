@@ -212,3 +212,93 @@ def test_a_facility_with_child_accounts_is_still_a_facility_and_company_records_
     plan = plan_for([LOC], [PARENT, OTHER, campus, wing, subsidiary], [])
     assert match(plan, LOC.slug)["account_id"] == "A1"  # matched, not re-created
     assert plan["proposals"] == [] and plan["unlisted"] == []  # the company record is not flagged as a missing facility
+
+
+# ----------------------------------------------------------------- edge cases raised in review
+OTHER_AT = dict(parent_id="P2", parent_name=OTHER["name"], **AT)
+
+
+def titles(plan):
+    return [p["title"] for p in plan["proposals"]]
+
+
+def test_a_survivor_that_approved_duplicates_point_at_is_never_demoted(locations, seed_accounts, seed_contacts):
+    # One Kettering duplicate has already been approved against the default survivor...
+    survivor, approved_loser, other = "0016KTS1UAWBRXS09J", "001WR41PYNWXCAE2X4", "001B7XZAA3AFALS9GP"
+    accounts = [dict(a) for a in seed_accounts]
+    next(a for a in accounts if a["account_id"] == approved_loser).update(duplicate_of_account=survivor, status="Inactive")
+    # ...and only then does someone pin a different survivor. Following the pin would leave a duplicate chain.
+    proposals = by_account(plan_for(locations, accounts, seed_contacts, pins={"bellhaven-of-kettering": other}))
+    assert changes(proposals[survivor])["parent_id"] == BELLHAVEN
+    assert changes(proposals[other])["duplicate_of_account"] == survivor
+
+
+def test_facility_with_a_blank_street_is_matched_not_recreated_and_company_hq_is_never_a_candidate():
+    blank = account("A1", "Bellhaven of Testville", "P1", parent_name=PARENT_NAME, billing_city="Testville",
+                    billing_state="OH", billing_zip="44000", phone="(555) 010-0001", lifetime_revenue=90000, outstanding_ar=4000)
+    hq = account("P2", "Other Operator (Parent Account)", **AT)  # a company record whose HQ shares the address
+    child = account("A9", "Some Other Facility", "P2", billing_street="9 Far Rd", billing_city="Elsewhere",
+                    billing_state="OH", billing_zip="44999")
+    plan = plan_for([LOC], [PARENT, hq, child, blank], [{"account_id": "A1", "name": "Ann Example", "title": "Administrator"}])
+    assert match(plan, LOC.slug)["account_id"] == "A1"
+    assert not any(p["kind"] == "create" or p["account_id"] == "P2" for p in plan["proposals"])
+
+
+def test_matched_account_left_in_needs_review_is_proposed_back_to_active():
+    relisted = account("A1", "Bellhaven of Testville", "P1", parent_name=PARENT_NAME, status="Needs Review", **AT)
+    (p,) = plan_for([LOC], [PARENT, relisted], [])["proposals"]
+    assert changes(p) == {"status": "Active"} and "status was Needs Review" in p["payload"]["fields"]["note"]
+
+
+def test_frozen_record_is_linked_only_once_the_survivor_is_really_under_bellhaven():
+    frozen = account("A1", "Testville Care", lifetime_revenue=5000, outstanding_ar=100, **OTHER_AT)
+    twin = account("A2", "Testville Nursing", **AT)  # unparented, movable
+    first = plan_for([LOC], [PARENT, OTHER, frozen, twin], [])
+    assert [p["account_id"] for p in first["proposals"]] == ["A2"]  # re-parent the twin; no link to a non-Bellhaven record
+    twin.update(parent_id="P1", parent_name=PARENT_NAME, name=LOC.name)  # the re-parent was approved
+    (link,) = plan_for([LOC], [PARENT, OTHER, frozen, twin], [])["proposals"]
+    assert (link["kind"], link["account_id"], link["payload"]["link_to"]) == ("chow", "A1", "A2")
+
+
+def test_flagged_account_is_linked_when_the_new_owners_record_appears_later():
+    gone = account("A1", "Bellhaven of Gone", "P1", parent_name=PARENT_NAME, status="Needs Review",
+                   lifetime_revenue=130000, outstanding_ar=5200, **AT)
+    assert plan_for([], [PARENT, OTHER, gone], [])["proposals"] == []  # flagged, nothing new to say
+    new_owner = account("A2", "Other Care of Gone", **OTHER_AT)
+    (p,) = plan_for([], [PARENT, OTHER, gone, new_owner], [])["proposals"]
+    assert (p["kind"], p["payload"]["link_to"]) == ("chow", "A2")
+
+
+def test_several_possible_successors_is_a_medium_confidence_tie_break_showing_all_of_them():
+    left = account("A1", "Bellhaven of Elsewhere", "P1", parent_name=PARENT_NAME, **AT)
+    one, two = account("A2", "Other of Elsewhere", **OTHER_AT), account("A3", "Third of Elsewhere", **AT)
+    (p,) = plan_for([], [PARENT, OTHER, left, one, two], [])["proposals"]
+    assert p["confidence"] == "medium" and len(p["evidence"]["others"]) == 2
+    assert p["payload"]["fields"]["duplicate_of_account"] == "A2"  # the one that has a parent
+
+
+def test_same_parent_duplicate_with_open_ar_is_flagged_once_then_left_alone():
+    keep = account("A1", "Bellhaven of Testville", "P1", parent_name=PARENT_NAME, lifetime_revenue=9000, outstanding_ar=50,
+                   phone="(555) 010-0001", **AT)
+    twin = account("A2", "Bellhaven of Testville", "P1", parent_name=PARENT_NAME, lifetime_revenue=7000, outstanding_ar=40, **AT)
+    (flag,) = plan_for([LOC], [PARENT, keep, twin], [])["proposals"]
+    assert (flag["account_id"], changes(flag)) == ("A2", {"status": "Needs Review"})  # never deactivated
+    twin.update(status="Needs Review")  # approved
+    assert plan_for([LOC], [PARENT, keep, twin], [])["proposals"] == []  # converges
+
+
+def test_duplicate_with_revenue_history_is_worded_honestly_and_not_high_confidence():
+    current = account("A1", "Bellhaven of Testville", "P1", parent_name=PARENT_NAME, **AT)
+    old = account("A2", "Testville Care", lifetime_revenue=47000, outstanding_ar=0, **OTHER_AT)
+    (p,) = plan_for([LOC], [PARENT, OTHER, current, old], [])["proposals"]
+    assert p["confidence"] == "medium" and "has revenue history but no outstanding AR" in p["evidence"]["reason"]
+    assert "no billing history is lost" not in p["evidence"]["reason"]
+
+
+def test_blank_zips_do_not_make_two_addresses_the_same_place():
+    springfield = account("A1", "Bellhaven of Springfield", "P1", parent_name=PARENT_NAME, billing_street="100 Main St",
+                          billing_city="Springfield", billing_state="OH", billing_zip="")
+    dayton = account("A2", "Maple Care of Dayton", "P2", parent_name=OTHER["name"], billing_street="100 Main Street",
+                     billing_city="Dayton", billing_state="OH", billing_zip="")
+    (p,) = plan_for([], [PARENT, OTHER, springfield, dayton], [])["proposals"]
+    assert p["category"] == "not_on_website"  # flagged for review, not "superseded by" an unrelated record
