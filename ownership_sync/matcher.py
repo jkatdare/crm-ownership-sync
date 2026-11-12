@@ -114,12 +114,13 @@ class Planner:
             if c.get("is_active", True):
                 self.contacts_of[c["account_id"]].append(c)
         # Facility records only. A company record is labelled "(Parent Account)", or is one that other
-        # accounts hang off while having no parent of its own. A facility that happens to have child
-        # accounts still has a parent, so it stays a facility; so does one with a blank address.
+        # accounts hang off while having neither a parent nor a street address of its own. A facility
+        # that happens to have child accounts stays a facility; so does one with a blank address.
         has_children = {a["parent_id"] for a in accounts if a["parent_id"]}
         self.facilities = [a for a in accounts if a["account_id"] != self.tid
                            and not a["name"].rstrip().endswith(COMPANY_SUFFIX)
-                           and not (a["account_id"] in has_children and not a["parent_id"])]
+                           and not (a["account_id"] in has_children and not a["parent_id"]
+                                    and not (a["billing_street"] or "").strip())]
         # Records already resolved by an earlier run (marked duplicate, or a CHOW predecessor) never
         # take part in matching again - this is what lets re-runs converge.
         self.live = [a for a in self.facilities if not a["duplicate_of_account"] and not a["chow_current_account"]]

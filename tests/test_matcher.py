@@ -302,3 +302,12 @@ def test_blank_zips_do_not_make_two_addresses_the_same_place():
                      billing_city="Dayton", billing_state="OH", billing_zip="")
     (p,) = plan_for([], [PARENT, OTHER, springfield, dayton], [])["proposals"]
     assert p["category"] == "not_on_website"  # flagged for review, not "superseded by" an unrelated record
+
+
+def test_unparented_facility_with_child_accounts_is_matched_not_recreated():
+    campus = account("A1", "Testville Care Campus", **AT)  # no parent, but another record hangs off it
+    wing = account("A2", "Testville Memory Wing", "A1", billing_street="12 Oak St", billing_city="Testville",
+                   billing_state="OH", billing_zip="44000")
+    plan = plan_for([LOC], [PARENT, OTHER, campus, wing], [])
+    assert match(plan, LOC.slug)["account_id"] == "A1"
+    assert [p["kind"] for p in plan["proposals"]] == ["patch"]  # re-parent and rename it; never a second account
