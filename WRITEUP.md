@@ -26,8 +26,13 @@ parent.
 
 **What I'd build next.**
 
-- Contacts: the website names each administrator, and new accounts start with none.
-- Find the new owner of facilities that left Bellhaven, so "Needs Review" becomes "moved to X".
-- Host the review app with sign-in, and send a notification when the daily run finds something new.
+- Contacts: the website names an administrator for all 35 communities, but only 20 of the accounts
+  have that person as a contact, and 9 have no contacts at all. Propose contact changes through the
+  same review flow.
+- Find the new owner of the 2 facilities that left Bellhaven (Alliance and Coldwater), using other
+  operators' websites and public registries, so "Needs Review" becomes "moved to X".
+- Host the review app with sign-in and a shared database, and send a notification when the daily
+  run finds something new. Today it runs on one laptop.
 
-The reasoning behind each change is in [DETAILS.md](DETAILS.md).
+The reasoning behind each change, and more ideas for what to build next, are in
+[DETAILS.md](DETAILS.md).

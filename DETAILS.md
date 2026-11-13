@@ -175,19 +175,44 @@ I built this with Claude Code and directed it rather than accepting its first an
 
 ## What I would build next
 
-1. **Contacts.** The website names each administrator; the CRM's administrator contacts are stale
-   for several communities, and new accounts start with none. Propose contact changes the same way.
-2. **Find the new owner.** For facilities that leave an operator, look at other operators' sites
-   and public facility registries so "Needs Review" becomes "moved to X".
-3. **A grace period for removals.** Track first-seen / last-seen per location and only flag an
-   account after it has been missing for N consecutive runs.
-4. **Survivor picker in the UI** for ambiguous duplicate groups, instead of `overrides.json`.
-5. **Hosted review app** with sign-in and a shared database, and a notification (Slack / email)
-   when a run produces new proposals or fails.
-6. **More operators.** The operator name, parent account, brand words and care-type map are already
-   configuration; the scraper would become one adapter per site.
-7. **Proper address normalisation** (USPS / libpostal) once the address formats get messier than
-   this dataset.
+The first three are the ones in the short writeup, with the numbers behind them (read from the CRM
+after the cleanup).
+
+1. **Contacts.** The website names an administrator for all 35 communities. Only 20 of the 35
+   accounts have that person as an active contact: 9 have no contacts at all (including the 6 new
+   accounts), 4 list a different administrator (at Lima, for example, the CRM's administrator is
+   not the one on the website) and 2 have contacts but no administrator. I would propose contact
+   changes through the same review flow: add the missing administrator, and mark an outdated one
+   inactive rather than deleting it. The scraper already collects the name and phone.
+2. **Find the new owner.** Alliance and Coldwater are flagged Needs Review because they left
+   Bellhaven's website and nothing else in the CRM is at their address. Checking other operators'
+   websites and public registries (CMS publishes ownership and change-of-ownership data for
+   nursing homes; assisted living is licensed by each state) would turn "Needs Review" into a
+   concrete proposal, "moved to X". Sandusky shows the pattern: the CRM already had the new owner's
+   account, so the tool could link it.
+3. **Hosted review app with sign-in and notifications.** Today the app runs on one laptop, the
+   ledger is a file in the repo, the reviewer is identified by their operating-system user name,
+   and the daily job finds new proposals without telling anyone. Hosting it behind company sign-in
+   with a shared database, and sending a Slack or email message when a run finds something new or
+   fails, turns a one-person tool into a team process with a real audit trail.
+4. **A grace period for removals.** A community that drops off the website is flagged on the first
+   run. Tracking first-seen / last-seen per location and flagging only after it has been missing
+   for several runs keeps a website glitch from flagging a real customer.
+5. **Survivor picker in the UI.** Kettering had three records with nothing to tell them apart, and
+   changing the pick means editing `overrides.json`. The reviewer should be able to choose the
+   surviving record on the card.
+6. **More operators.** The CRM has five other parent companies with the same problem. The operator
+   name, parent account, brand words and care-type map are already configuration; the scraper would
+   become one adapter per website. A facility leaving one site and appearing on another is then
+   detected from both sides.
+7. **Better address matching.** Hand-written rules cover Rd / Road and NW / Northwest. Real data has
+   suite numbers and typos; USPS validation, libpostal or geocoding would handle those, and would
+   catch a typo like Portsmouth's zip directly.
+8. **Bulk approval for low-risk changes.** The 28 proposals I approved myself took about six
+   minutes, which does not scale to many operators. Minor spelling fixes could be approved in one
+   click, while re-parents, duplicates and ownership changes always need a person.
+9. **Undo.** The CRM keeps no field history, so a wrong approval is hard to reverse. A "revert"
+   button would propose the opposite change, using the before-values the ledger already stores.
 
 ## Time spent
 
